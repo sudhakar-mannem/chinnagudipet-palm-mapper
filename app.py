@@ -452,12 +452,33 @@ def page_plant_mapping() -> None:
     st.title("Plant Mapping")
     st.caption("Connect Google Drive, choose folders, and run health + GPS/altitude analysis.")
 
+    secret_status = reload_env() or {}
     status = setup_ok()
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("OpenAI key", "Ready" if status["openai"] else "Missing")
     c2.metric("Drive credentials", "Ready" if status["credentials"] else "Missing")
     c3.metric("Drive login", "Connected" if status["token"] else "Not yet")
     c4.metric("Folder ID", "Set" if status["folder"] else "Missing")
+
+    with st.expander("Cloud secrets status", expanded=not status["token"]):
+        st.write(
+            {
+                "secrets_available": secret_status.get("secrets_available"),
+                "openai_from_secrets": secret_status.get("openai_from_secrets"),
+                "credentials_written": secret_status.get("credentials_written"),
+                "token_written": secret_status.get("token_written"),
+                "credentials_error": secret_status.get("credentials_error") or "(none)",
+                "token_error": secret_status.get("token_error") or "(none)",
+                "credentials_file_exists": CREDENTIALS_FILE.exists(),
+                "token_file_exists": TOKEN_FILE.exists(),
+            }
+        )
+        if not status["token"]:
+            st.warning(
+                "Drive login needs `GOOGLE_TOKEN_B64` (recommended) or `GOOGLE_TOKEN_JSON`. "
+                "Locally run `python make_cloud_secrets.py` and paste the printed lines "
+                "into Cloud Secrets. Remove any old invalid GOOGLE_*_JSON lines first."
+            )
 
     st.subheader("Connect to Google Drive")
     gc1, gc2, gc3 = st.columns([1.2, 1, 2])

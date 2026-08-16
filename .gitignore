@@ -5,6 +5,7 @@
 credentials/*
 !credentials/.gitkeep
 .streamlit/secrets.toml
+.streamlit/secrets_cloud_snippet.toml
 
 # Local runtime data (kept under AppData in production, but ignore if present)
 cache/

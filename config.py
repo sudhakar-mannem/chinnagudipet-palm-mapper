@@ -10,16 +10,55 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent
 
 
-def _apply_streamlit_secrets() -> None:
-    """Copy Streamlit Community Cloud / local secrets.toml into os.environ."""
+def _materialize_json_secret(raw, target: Path) -> None:
+    """Write a secrets value (dict / JSON text / base64 JSON) to target path."""
+    import base64
+
+    if isinstance(raw, dict):
+        text = json.dumps(raw)
+    else:
+        text = str(raw).strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        # Prefer plain JSON; fall back to base64 (TOML-safe for Cloud secrets)
+        try:
+            json.loads(text)
+        except Exception:
+            decoded = base64.b64decode(text).decode("utf-8")
+            json.loads(decoded)  # validate
+            text = decoded
+    target.write_text(text, encoding="utf-8")
+
+
+def _apply_streamlit_secrets() -> dict:
+    """
+    Copy Streamlit Community Cloud / local secrets.toml into os.environ
+    and materialize OAuth JSON files. Returns a small status dict for UI.
+    """
+    status = {
+        "secrets_available": False,
+        "openai_from_secrets": False,
+        "credentials_written": False,
+        "token_written": False,
+        "credentials_error": "",
+        "token_error": "",
+    }
     try:
         import streamlit as st
 
         if not hasattr(st, "secrets"):
-            return
+            return status
         secrets = st.secrets
-    except Exception:
-        return
+        _ = len(secrets)
+        status["secrets_available"] = True
+    except Exception as exc:
+        status["credentials_error"] = "secrets unavailable: %s" % exc
+        return status
 
     def _get(key: str):
         try:
@@ -38,38 +77,62 @@ def _apply_streamlit_secrets() -> None:
         if value is None or value == "":
             continue
         os.environ[key] = str(value)
+        if key == "OPENAI_API_KEY":
+            status["openai_from_secrets"] = True
 
-    # Optional: paste full OAuth client JSON / token JSON into secrets for Cloud
     cred_dir = ROOT / "credentials"
     cred_dir.mkdir(parents=True, exist_ok=True)
-    for secret_key, filename in (
-        ("GOOGLE_CREDENTIALS_JSON", "credentials.json"),
-        ("GOOGLE_TOKEN_JSON", "token.json"),
-    ):
-        raw = _get(secret_key)
-        if not raw:
+
+    # Prefer *_B64 keys (valid TOML always). Fall back to *_JSON.
+    secret_specs = (
+        (
+            ("GOOGLE_CREDENTIALS_B64", "GOOGLE_CREDENTIALS_JSON"),
+            "credentials.json",
+            "credentials_written",
+            "credentials_error",
+        ),
+        (
+            ("GOOGLE_TOKEN_B64", "GOOGLE_TOKEN_JSON"),
+            "token.json",
+            "token_written",
+            "token_error",
+        ),
+    )
+    for keys, filename, flag_key, err_key in secret_specs:
+        raw = None
+        used = None
+        for key in keys:
+            raw = _get(key)
+            if raw is not None and raw != "":
+                used = key
+                break
+        if raw is None or raw == "":
+            status[err_key] = "set %s (recommended) or %s" % (keys[0], keys[1])
             continue
         target = cred_dir / filename
         try:
-            if isinstance(raw, dict):
-                target.write_text(json.dumps(raw), encoding="utf-8")
-            else:
-                text = str(raw).strip()
-                # Validate JSON before writing
-                json.loads(text)
-                target.write_text(text, encoding="utf-8")
-        except Exception:
-            pass
+            _materialize_json_secret(raw, target)
+            status[flag_key] = True
+            status[err_key] = "ok via %s" % used
+        except Exception as exc:
+            status[err_key] = "could not write %s from %s: %s" % (filename, used, exc)
+    return status
 
 
 def reload_env():
     """Load .env then overlay Streamlit secrets (Cloud / local secrets.toml)."""
+    global DRIVE_FOLDER_ID, OPENAI_API_KEY, OPENAI_VISION_MODEL, CACHE_DIR, PHOTOS_DIR, OUTPUT_DIR, STATE_PATH
     env_path = ROOT / ".env"
     load_dotenv(dotenv_path=env_path, override=True, encoding="utf-8-sig")
-    _apply_streamlit_secrets()
+    secret_status = _apply_streamlit_secrets()
 
+    DRIVE_FOLDER_ID = (
+        os.getenv("GOOGLE_DRIVE_FOLDER_ID") or "1_ZkYcDg4zu42RKNN5o4ChipG7Wlz43Gs"
+    ).strip()
+    OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip().strip('"').strip("'")
+    OPENAI_VISION_MODEL = (os.getenv("OPENAI_VISION_MODEL") or "gpt-4o").strip()
+    return secret_status
 
-reload_env()
 
 CREDENTIALS_DIR = ROOT / "credentials"
 
@@ -95,6 +158,9 @@ DRIVE_FOLDER_ID = (
 ).strip()
 OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip().strip('"').strip("'")
 OPENAI_VISION_MODEL = (os.getenv("OPENAI_VISION_MODEL") or "gpt-4o").strip()
+
+# Apply .env / Streamlit secrets after path defaults exist
+reload_env()
 
 
 def openai_key_configured() -> bool:
