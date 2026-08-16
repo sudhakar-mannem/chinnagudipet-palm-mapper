@@ -194,3 +194,35 @@ ICON_URLS = {
 def ensure_dirs():
     for path in (CREDENTIALS_DIR, CACHE_DIR, PHOTOS_DIR, OUTPUT_DIR):
         path.mkdir(parents=True, exist_ok=True)
+    _seed_bundled_state()
+
+
+def _seed_bundled_state() -> None:
+    """
+    On Streamlit Cloud (empty cache), copy bundled farm map state so Map view
+    works immediately. Photos download on demand from Drive when opened.
+    """
+    bundled = ROOT / "data" / "plant_state.json"
+    if not bundled.exists():
+        return
+    if STATE_PATH.exists() and STATE_PATH.stat().st_size > 1000:
+        return
+    try:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        STATE_PATH.write_bytes(bundled.read_bytes())
+    except Exception:
+        pass
+
+    # Also seed consolidated export copies when missing
+    exports = ROOT / "data" / "exports"
+    if not exports.exists():
+        return
+    for name in ("palm_health_consolidated.kml", "palm_health_consolidated.json"):
+        src = exports / name
+        dest = OUTPUT_DIR / name
+        if src.exists() and not dest.exists():
+            try:
+                OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(src.read_bytes())
+            except Exception:
+                pass

@@ -278,6 +278,19 @@ def render_photo_panel(cluster: PlantCluster) -> None:
             )
         )
         local = Path(photo.local_path) if photo.local_path else None
+        # Remap / download for Cloud (Windows paths from local runs won't exist)
+        try:
+            from services.drive import ensure_local_photo
+
+            resolved = ensure_local_photo(
+                photo.file_id or "",
+                photo.file_name or "",
+                photo.local_path,
+            )
+            if resolved is not None:
+                local = resolved
+        except Exception:
+            pass
         if local and local.exists():
             ok = show_fast_image(local, caption=local.name, max_side=480)
             if ok:

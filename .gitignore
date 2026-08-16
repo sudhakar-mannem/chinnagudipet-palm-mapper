@@ -7,7 +7,7 @@ credentials/*
 .streamlit/secrets.toml
 .streamlit/secrets_cloud_snippet.toml
 
-# Local runtime data (kept under AppData in production, but ignore if present)
+# Local runtime data
 cache/
 output/
 thumbs/
@@ -22,9 +22,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# Exports / OS
+# Large exports (allow bundled data/ copies)
 *.kmz
 *.kml
+!data/**/*.kml
+!data/**/*.json
 .DS_Store
 Thumbs.db
 *.log

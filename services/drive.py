@@ -199,6 +199,38 @@ def download_file(service, file_id: str, dest: Path) -> Path:
     return dest
 
 
+def ensure_local_photo(file_id: str, file_name: str, local_path: Optional[str] = None) -> Optional[Path]:
+    """
+    Resolve a photo on disk. Remaps portable names to PHOTOS_DIR and
+    downloads from Drive when missing (used on Streamlit Cloud).
+    """
+    ensure_dirs()
+    candidates = []
+    if local_path:
+        candidates.append(Path(local_path))
+    safe_name = "%s__%s" % (file_id, Path(file_name or "photo.jpg").name)
+    candidates.append(PHOTOS_DIR / safe_name)
+    if local_path and "__" in Path(local_path).name:
+        candidates.append(PHOTOS_DIR / Path(local_path).name)
+
+    for path in candidates:
+        try:
+            if path.exists():
+                return path
+        except Exception:
+            continue
+
+    if not file_id:
+        return None
+    dest = PHOTOS_DIR / safe_name
+    try:
+        service = get_drive_service(interactive=False)
+        download_file(service, file_id, dest)
+        return dest if dest.exists() else None
+    except Exception:
+        return None
+
+
 def sync_photos(
     folder_id: Optional[str] = None,
     folder_ids: Optional[List[str]] = None,
