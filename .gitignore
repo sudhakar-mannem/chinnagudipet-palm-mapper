@@ -1,0 +1,28 @@
+# Secrets / local auth
+.env
+.env.*
+!.env.example
+credentials/*
+!credentials/.gitkeep
+
+# Local runtime data (kept under AppData in production, but ignore if present)
+cache/
+output/
+thumbs/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Exports / OS
+*.kmz
+*.kml
+.DS_Store
+Thumbs.db
+*.log
