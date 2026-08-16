@@ -205,22 +205,32 @@ def _seed_bundled_state() -> None:
     bundled = ROOT / "data" / "plant_state.json"
     if not bundled.exists():
         return
-    if STATE_PATH.exists() and STATE_PATH.stat().st_size > 1000:
-        return
-    try:
-        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        STATE_PATH.write_bytes(bundled.read_bytes())
-    except Exception:
-        pass
 
-    # Also seed consolidated export copies when missing
+    needs_seed = True
+    if STATE_PATH.exists():
+        try:
+            existing = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            obs = existing.get("observations") or []
+            # Keep richer local/cloud state; only replace empty shells
+            if len(obs) >= 10:
+                needs_seed = False
+        except Exception:
+            needs_seed = True
+
+    if needs_seed:
+        try:
+            STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            STATE_PATH.write_bytes(bundled.read_bytes())
+        except Exception:
+            pass
+
     exports = ROOT / "data" / "exports"
     if not exports.exists():
         return
     for name in ("palm_health_consolidated.kml", "palm_health_consolidated.json"):
         src = exports / name
         dest = OUTPUT_DIR / name
-        if src.exists() and not dest.exists():
+        if src.exists() and (not dest.exists() or dest.stat().st_size < 1000):
             try:
                 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(src.read_bytes())
