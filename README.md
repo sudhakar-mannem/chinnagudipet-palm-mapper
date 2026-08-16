@@ -85,6 +85,22 @@ python cli.py --force-download
 | Red | Critical / diseased |
 | White | Unknown / AI could not determine |
 
+## Deploy on Streamlit Community Cloud
+
+Follow the [official get-started / deploy docs](https://docs.streamlit.io/deploy/streamlit-community-cloud/get-started).
+
+1. Push this repo to GitHub (already done for `chinnagudipet-palm-mapper`).
+2. Open [share.streamlit.io](https://share.streamlit.io/) → **Create app** → **Yup, I have an app**.
+3. Set:
+   - Repository: `sudhakar-mannem/chinnagudipet-palm-mapper`
+   - Branch: `main`
+   - Main file: `app.py`
+   - Python version: **3.12** (Advanced settings)
+4. In **Advanced settings → Secrets**, paste values from `.streamlit/secrets.toml.example` (with your real keys). For Drive on Cloud, also set multiline `GOOGLE_CREDENTIALS_JSON` and `GOOGLE_TOKEN_JSON` from your local `credentials/` files after running `python auth_drive.py` once.
+5. Click **Deploy**.
+
+Map view works once analysis state exists on the server (run **Plant Mapping** after secrets are set, or sync from CLI locally and upload state separately).
+
 ## Project layout
 
 ```

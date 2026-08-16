@@ -1,6 +1,7 @@
 """Application configuration."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -9,21 +10,81 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent
 
 
+def _apply_streamlit_secrets() -> None:
+    """Copy Streamlit Community Cloud / local secrets.toml into os.environ."""
+    try:
+        import streamlit as st
+
+        if not hasattr(st, "secrets"):
+            return
+        secrets = st.secrets
+    except Exception:
+        return
+
+    def _get(key: str):
+        try:
+            return secrets[key]
+        except Exception:
+            return None
+
+    mapping = {
+        "OPENAI_API_KEY": _get("OPENAI_API_KEY"),
+        "OPENAI_VISION_MODEL": _get("OPENAI_VISION_MODEL"),
+        "GOOGLE_DRIVE_FOLDER_ID": _get("GOOGLE_DRIVE_FOLDER_ID"),
+        "PALM_CACHE_DIR": _get("PALM_CACHE_DIR"),
+        "PALM_OUTPUT_DIR": _get("PALM_OUTPUT_DIR"),
+    }
+    for key, value in mapping.items():
+        if value is None or value == "":
+            continue
+        os.environ[key] = str(value)
+
+    # Optional: paste full OAuth client JSON / token JSON into secrets for Cloud
+    cred_dir = ROOT / "credentials"
+    cred_dir.mkdir(parents=True, exist_ok=True)
+    for secret_key, filename in (
+        ("GOOGLE_CREDENTIALS_JSON", "credentials.json"),
+        ("GOOGLE_TOKEN_JSON", "token.json"),
+    ):
+        raw = _get(secret_key)
+        if not raw:
+            continue
+        target = cred_dir / filename
+        try:
+            if isinstance(raw, dict):
+                target.write_text(json.dumps(raw), encoding="utf-8")
+            else:
+                text = str(raw).strip()
+                # Validate JSON before writing
+                json.loads(text)
+                target.write_text(text, encoding="utf-8")
+        except Exception:
+            pass
+
+
 def reload_env():
-    """Load .env into process env (override so edits take effect after restart)."""
+    """Load .env then overlay Streamlit secrets (Cloud / local secrets.toml)."""
     env_path = ROOT / ".env"
     load_dotenv(dotenv_path=env_path, override=True, encoding="utf-8-sig")
+    _apply_streamlit_secrets()
 
 
 reload_env()
 
 CREDENTIALS_DIR = ROOT / "credentials"
 
-# Keep heavy photo/cache I/O off OneDrive — OneDrive sync makes the app feel frozen.
-_LOCAL_DATA = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
-CACHE_DIR = Path(os.getenv("PALM_CACHE_DIR") or (_LOCAL_DATA / "PalmMapper" / "cache"))
+# Local Windows: keep heavy I/O off OneDrive. Cloud/Linux: use home cache.
+def _default_data_root() -> Path:
+    local_app = os.environ.get("LOCALAPPDATA")
+    if local_app:
+        return Path(local_app) / "PalmMapper"
+    return Path.home() / ".palm_mapper"
+
+
+_DATA_ROOT = _default_data_root()
+CACHE_DIR = Path(os.getenv("PALM_CACHE_DIR") or (_DATA_ROOT / "cache"))
 PHOTOS_DIR = CACHE_DIR / "photos"
-OUTPUT_DIR = Path(os.getenv("PALM_OUTPUT_DIR") or (_LOCAL_DATA / "PalmMapper" / "output"))
+OUTPUT_DIR = Path(os.getenv("PALM_OUTPUT_DIR") or (_DATA_ROOT / "output"))
 STATE_PATH = CACHE_DIR / "plant_state.json"
 
 CREDENTIALS_FILE = CREDENTIALS_DIR / "credentials.json"
