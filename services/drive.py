@@ -48,20 +48,27 @@ def get_credentials(interactive: bool = False) -> Credentials:
         if not interactive:
             raise DriveAuthRequired(
                 "Google Drive is not authenticated yet.\n"
-                "Run this once in a terminal (fast, outside Streamlit):\n\n"
-                "  python auth_drive.py\n"
+                "On Streamlit Cloud: set GOOGLE_TOKEN_B64 in Secrets "
+                "(run: python make_cloud_secrets.py locally after auth_drive.py).\n"
+                "On your PC: run  python auth_drive.py\n"
             )
         flow = InstalledAppFlow.from_client_secrets_file(
             str(CREDENTIALS_FILE), DRIVE_SCOPES
         )
         # Fixed port is more reliable/faster than port=0 inside some environments
-        creds = flow.run_local_server(
-            port=8090,
-            open_browser=True,
-            prompt="consent",
-            authorization_prompt_message="Opening browser for Google Drive login…",
-            success_message="Drive login OK. You can close this tab and return to the app.",
-        )
+        try:
+            creds = flow.run_local_server(
+                port=8090,
+                open_browser=True,
+                prompt="consent",
+                authorization_prompt_message="Opening browser for Google Drive login…",
+                success_message="Drive login OK. You can close this tab and return to the app.",
+            )
+        except Exception as exc:
+            raise DriveAuthRequired(
+                "Interactive Google login failed (%s).\n"
+                "Run outside Streamlit:  python auth_drive.py" % exc
+            ) from exc
         TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
 
     return creds

@@ -348,6 +348,40 @@ def render_photo_panel(cluster: PlantCluster) -> None:
             st.caption("If photos stay missing, reconnect Google Drive in the sidebar.")
 
 
+
+
+def is_streamlit_cloud() -> bool:
+    """True when running on Streamlit Community Cloud (no local browser for OAuth)."""
+    if os.environ.get("STREAMLIT_SHARING_MODE"):
+        return True
+    if Path("/mount/src").exists():
+        return True
+    # Community Cloud Linux containers commonly use this home path
+    try:
+        home = str(Path.home()).replace("\\", "/")
+        if home.startswith("/home/appuser"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def browser_oauth_available() -> bool:
+    """Desktop OAuth needs a local browser; Cloud / headless hosts do not have one."""
+    if is_streamlit_cloud():
+        return False
+    if os.environ.get("STREAMLIT_SERVER_HEADLESS", "").lower() in ("true", "1"):
+        # Still allow local headless if a system browser exists
+        pass
+    try:
+        import webbrowser
+
+        webbrowser.get()
+        return True
+    except Exception:
+        return False
+
+
 def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
     if disconnect_clicked and TOKEN_FILE.exists():
         try:
@@ -358,31 +392,87 @@ def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
             cached_subfolders.clear()
             for key in ("drive_folders", "folders_loaded", "selected_folder_paths"):
                 st.session_state.pop(key, None)
-            st.success("Disconnected from Google Drive.")
+            # On Cloud, Secrets will rewrite token.json on the next reload_env()
+            secret_status = reload_env() or {}
+            if secret_status.get("token_written") and TOKEN_FILE.exists():
+                st.info(
+                    "Local token cleared, but Cloud Secrets still provide `GOOGLE_TOKEN_B64` "
+                    "(Drive stays available). Remove that secret to fully disconnect on Cloud."
+                )
+            else:
+                st.success("Disconnected from Google Drive.")
             st.rerun()
 
-    if connect_clicked:
-        status = setup_ok()
-        if not status["credentials"]:
-            st.error("Add credentials/credentials.json first.")
-            return
-        with st.spinner(
-            "Opening your browser for Google sign-in… Complete login there, then return here."
-        ):
-            try:
-                from services.drive import get_credentials
+    if not connect_clicked:
+        return
 
-                get_credentials(interactive=True)
-                cached_subfolders.clear()
-                st.session_state["folders_loaded"] = True
-                st.success("Google Drive connected.")
-                st.rerun()
-            except Exception as exc:
-                st.error("Google login failed: %s" % exc)
-                st.info(
-                    "If the browser did not open, run once in a terminal:\n\n"
-                    "`python auth_drive.py`"
-                )
+    # Always re-apply Secrets first (Cloud) / local env — never require a browser there
+    secret_status = reload_env() or {}
+    if not CREDENTIALS_FILE.exists():
+        st.error(
+            "Missing Google OAuth client credentials. On Cloud, set `GOOGLE_CREDENTIALS_B64` "
+            "in Secrets (run `python make_cloud_secrets.py` locally and paste the output)."
+        )
+        return
+
+    from services.drive import get_credentials
+
+    # 1) Prefer existing / Secrets-backed token (works on Cloud)
+    try:
+        get_credentials(interactive=False)
+        cached_subfolders.clear()
+        st.session_state["folders_loaded"] = True
+        st.success("Google Drive connected.")
+        st.rerun()
+        return
+    except DriveAuthRequired:
+        pass
+    except Exception as exc:
+        st.warning("Could not use saved Drive token: %s" % exc)
+
+    # 2) Interactive browser login — local only
+    if not browser_oauth_available():
+        st.error(
+            "Browser Google login is not available on Streamlit Cloud "
+            '("could not locate runnable browser").'
+        )
+        st.markdown(
+            "Use a **pre-authorized token** in Cloud Secrets instead:\n\n"
+            "1. On your PC, run `python auth_drive.py` once (browser login locally)\n"
+            "2. Run `python make_cloud_secrets.py`\n"
+            "3. Paste `GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64` into "
+            "**Manage app → Settings → Secrets**\n"
+            "4. Reboot the app, then click **Connect** again"
+        )
+        with st.expander("Secrets status", expanded=True):
+            st.write(
+                {
+                    "secrets_available": secret_status.get("secrets_available"),
+                    "credentials_written": secret_status.get("credentials_written"),
+                    "token_written": secret_status.get("token_written"),
+                    "credentials_error": secret_status.get("credentials_error") or "(none)",
+                    "token_error": secret_status.get("token_error") or "(none)",
+                    "credentials_file_exists": CREDENTIALS_FILE.exists(),
+                    "token_file_exists": TOKEN_FILE.exists(),
+                }
+            )
+        return
+
+    with st.spinner(
+        "Opening your browser for Google sign-in… Complete login there, then return here."
+    ):
+        try:
+            get_credentials(interactive=True)
+            cached_subfolders.clear()
+            st.session_state["folders_loaded"] = True
+            st.success("Google Drive connected.")
+            st.rerun()
+        except Exception as exc:
+            st.error("Google login failed: %s" % exc)
+            st.info(
+                "If the browser did not open, run once in a terminal:\n\n"
+                "`python auth_drive.py`"
+            )
 
 
 def page_map_view() -> None:
@@ -532,11 +622,18 @@ def page_plant_mapping() -> None:
             }
         )
         if not status["token"]:
-            st.warning(
-                "Drive login needs `GOOGLE_TOKEN_B64` (recommended) or `GOOGLE_TOKEN_JSON`. "
-                "Locally run `python make_cloud_secrets.py` and paste the printed lines "
-                "into Cloud Secrets. Remove any old invalid GOOGLE_*_JSON lines first."
-            )
+            if is_streamlit_cloud():
+                st.warning(
+                    "On Streamlit Cloud, Drive login cannot open a browser. "
+                    "Paste `GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64` into Secrets "
+                    "(from `python make_cloud_secrets.py` on your PC), reboot, then click Connect."
+                )
+            else:
+                st.warning(
+                    "Drive login needs `GOOGLE_TOKEN_B64` (recommended) or `GOOGLE_TOKEN_JSON`. "
+                    "Locally run `python make_cloud_secrets.py` and paste the printed lines "
+                    "into Cloud Secrets. Remove any old invalid GOOGLE_*_JSON lines first."
+                )
 
     st.subheader("Connect to Google Drive")
     gc1, gc2, gc3 = st.columns([1.2, 1, 2])
