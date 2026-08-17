@@ -417,7 +417,8 @@ def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
 
     from services.drive import get_credentials
 
-    # 1) Prefer existing / Secrets-backed token (works on Cloud)
+    # 1) Prefer existing / Secrets-backed token (works on Cloud — no browser)
+    auth_error = ""
     try:
         get_credentials(interactive=False)
         cached_subfolders.clear()
@@ -425,24 +426,39 @@ def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
         st.success("Google Drive connected.")
         st.rerun()
         return
-    except DriveAuthRequired:
-        pass
+    except DriveAuthRequired as exc:
+        auth_error = str(exc)
     except Exception as exc:
+        auth_error = str(exc)
         st.warning("Could not use saved Drive token: %s" % exc)
 
-    # 2) Interactive browser login — local only
+    # 2) On Cloud / headless: never attempt browser OAuth
     if not browser_oauth_available():
+        token_ok = bool(secret_status.get("token_written")) or TOKEN_FILE.exists()
         st.error(
-            "Browser Google login is not available on Streamlit Cloud "
-            '("could not locate runnable browser").'
+            "Google Drive token is missing or revoked. "
+            "Streamlit Cloud cannot open a Google login browser — "
+            "you must refresh the token on your PC and update Secrets."
         )
+        if auth_error:
+            st.caption(auth_error.replace("\n", " "))
         st.markdown(
-            "Use a **pre-authorized token** in Cloud Secrets instead:\n\n"
-            "1. On your PC, run `python auth_drive.py` once (browser login locally)\n"
-            "2. Run `python make_cloud_secrets.py`\n"
-            "3. Paste `GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64` into "
-            "**Manage app → Settings → Secrets**\n"
-            "4. Reboot the app, then click **Connect** again"
+            """
+**Fix (on your Windows PC, not in the Cloud app):**
+
+```powershell
+cd "C:\\Users\\smann\\OneDrive\\Repo\\Chinnagudipet Farm Project\\palm_mapper"
+.\\.\venv\\Scripts\\Activate.ps1
+python auth_drive.py
+python make_cloud_secrets.py
+```
+
+1. Sign in when the browser opens  
+2. Copy the new `GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64` from  
+   `.streamlit\\secrets_cloud_snippet.toml`  
+3. Paste them into **Manage app → Settings → Secrets** (replace the old lines)  
+4. **Reboot** the Cloud app, then click **Connect** again
+"""
         )
         with st.expander("Secrets status", expanded=True):
             st.write(
@@ -450,8 +466,10 @@ def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
                     "secrets_available": secret_status.get("secrets_available"),
                     "credentials_written": secret_status.get("credentials_written"),
                     "token_written": secret_status.get("token_written"),
+                    "token_present_but_likely_revoked": token_ok,
                     "credentials_error": secret_status.get("credentials_error") or "(none)",
                     "token_error": secret_status.get("token_error") or "(none)",
+                    "credentials_dir": secret_status.get("credentials_dir") or str(CREDENTIALS_FILE.parent),
                     "credentials_file_exists": CREDENTIALS_FILE.exists(),
                     "token_file_exists": TOKEN_FILE.exists(),
                 }
