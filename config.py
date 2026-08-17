@@ -35,6 +35,35 @@ def _materialize_json_secret(raw, target: Path) -> None:
     target.write_text(text, encoding="utf-8")
 
 
+def _default_data_root() -> Path:
+    local_app = os.environ.get("LOCALAPPDATA")
+    if local_app:
+        return Path(local_app) / "PalmMapper"
+    return Path.home() / ".palm_mapper"
+
+
+_DATA_ROOT = _default_data_root()
+
+# Writable credentials dir (Cloud app tree can be read-only; repo copy is a seed only)
+CREDENTIALS_DIR = _DATA_ROOT / "credentials"
+_REPO_CREDENTIALS_DIR = ROOT / "credentials"
+
+
+def _migrate_credentials() -> None:
+    """Copy repo credentials/token into the writable data dir when newer/missing."""
+    CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
+    for name in ("credentials.json", "token.json"):
+        src = _REPO_CREDENTIALS_DIR / name
+        dest = CREDENTIALS_DIR / name
+        if not src.exists():
+            continue
+        try:
+            if (not dest.exists()) or (src.stat().st_mtime > dest.stat().st_mtime):
+                dest.write_bytes(src.read_bytes())
+        except Exception:
+            pass
+
+
 def _apply_streamlit_secrets() -> dict:
     """
     Copy Streamlit Community Cloud / local secrets.toml into os.environ
@@ -47,6 +76,7 @@ def _apply_streamlit_secrets() -> dict:
         "token_written": False,
         "credentials_error": "",
         "token_error": "",
+        "credentials_dir": str(CREDENTIALS_DIR),
     }
     try:
         import streamlit as st
@@ -80,7 +110,8 @@ def _apply_streamlit_secrets() -> dict:
         if key == "OPENAI_API_KEY":
             status["openai_from_secrets"] = True
 
-    cred_dir = ROOT / "credentials"
+    _migrate_credentials()
+    cred_dir = CREDENTIALS_DIR
     cred_dir.mkdir(parents=True, exist_ok=True)
 
     # Prefer *_B64 keys (valid TOML always). Fall back to *_JSON.
@@ -122,29 +153,22 @@ def _apply_streamlit_secrets() -> dict:
 def reload_env():
     """Load .env then overlay Streamlit secrets (Cloud / local secrets.toml)."""
     global DRIVE_FOLDER_ID, OPENAI_API_KEY, OPENAI_VISION_MODEL, CACHE_DIR, PHOTOS_DIR, OUTPUT_DIR, STATE_PATH
+    global CREDENTIALS_FILE, TOKEN_FILE
     env_path = ROOT / ".env"
     load_dotenv(dotenv_path=env_path, override=True, encoding="utf-8-sig")
+    _migrate_credentials()
+    CREDENTIALS_FILE = CREDENTIALS_DIR / "credentials.json"
+    TOKEN_FILE = CREDENTIALS_DIR / "token.json"
     secret_status = _apply_streamlit_secrets()
 
     DRIVE_FOLDER_ID = (
         os.getenv("GOOGLE_DRIVE_FOLDER_ID") or "1_ZkYcDg4zu42RKNN5o4ChipG7Wlz43Gs"
     ).strip()
-    OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip().strip('"').strip("'")
+    OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY or "").strip().strip('"').strip("'")
     OPENAI_VISION_MODEL = (os.getenv("OPENAI_VISION_MODEL") or "gpt-4o").strip()
     return secret_status
 
 
-CREDENTIALS_DIR = ROOT / "credentials"
-
-# Local Windows: keep heavy I/O off OneDrive. Cloud/Linux: use home cache.
-def _default_data_root() -> Path:
-    local_app = os.environ.get("LOCALAPPDATA")
-    if local_app:
-        return Path(local_app) / "PalmMapper"
-    return Path.home() / ".palm_mapper"
-
-
-_DATA_ROOT = _default_data_root()
 CACHE_DIR = Path(os.getenv("PALM_CACHE_DIR") or (_DATA_ROOT / "cache"))
 PHOTOS_DIR = CACHE_DIR / "photos"
 OUTPUT_DIR = Path(os.getenv("PALM_OUTPUT_DIR") or (_DATA_ROOT / "output"))
@@ -192,7 +216,8 @@ ICON_URLS = {
 
 
 def ensure_dirs():
-    for path in (CREDENTIALS_DIR, CACHE_DIR, PHOTOS_DIR, OUTPUT_DIR):
+    _migrate_credentials()
+    for path in (CREDENTIALS_DIR, _REPO_CREDENTIALS_DIR, CACHE_DIR, PHOTOS_DIR, OUTPUT_DIR):
         path.mkdir(parents=True, exist_ok=True)
     _seed_bundled_state()
 

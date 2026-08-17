@@ -40,17 +40,42 @@ def get_credentials(interactive: bool = False) -> Credentials:
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
-            TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
-        except Exception:
+        except Exception as refresh_exc:
             creds = None
+            # Stash for clearer Cloud/local messaging
+            get_credentials._last_refresh_error = str(refresh_exc)
+        else:
+            get_credentials._last_refresh_error = ""
+            # Persist refreshed token when possible; keep in-memory creds even if write fails
+            try:
+                TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+                TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
+                # Keep repo seed in sync for make_cloud_secrets.py on local machines
+                try:
+                    from config import _REPO_CREDENTIALS_DIR
+
+                    seed = _REPO_CREDENTIALS_DIR / "token.json"
+                    _REPO_CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
+                    seed.write_text(creds.to_json(), encoding="utf-8")
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
     if not creds or not creds.valid:
+        refresh_hint = getattr(get_credentials, "_last_refresh_error", "") or ""
         if not interactive:
+            detail = ""
+            if refresh_hint:
+                detail = "\nToken refresh failed: %s\n" % refresh_hint
             raise DriveAuthRequired(
-                "Google Drive is not authenticated yet.\n"
-                "On Streamlit Cloud: set GOOGLE_TOKEN_B64 in Secrets "
-                "(run: python make_cloud_secrets.py locally after auth_drive.py).\n"
-                "On your PC: run  python auth_drive.py\n"
+                "Google Drive is not authenticated yet.%s"
+                "On Streamlit Cloud: your GOOGLE_TOKEN_B64 may be expired/revoked. "
+                "On your PC run:\n"
+                "  python auth_drive.py\n"
+                "  python make_cloud_secrets.py\n"
+                "Then paste the new B64 lines into Cloud Secrets, reboot, click Connect.\n"
+                "Locally: python auth_drive.py\n" % detail
             )
         flow = InstalledAppFlow.from_client_secrets_file(
             str(CREDENTIALS_FILE), DRIVE_SCOPES

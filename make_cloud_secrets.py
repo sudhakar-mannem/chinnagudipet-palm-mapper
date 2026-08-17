@@ -9,9 +9,14 @@ Does not print raw tokens — only base64 blobs.
 from __future__ import annotations
 
 import base64
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from config import CREDENTIALS_FILE, TOKEN_FILE, ensure_dirs  # noqa: E402
 
 
 def b64_file(path: Path) -> str:
@@ -19,8 +24,15 @@ def b64_file(path: Path) -> str:
 
 
 def main() -> None:
-    cred = ROOT / "credentials" / "credentials.json"
-    tok = ROOT / "credentials" / "token.json"
+    ensure_dirs()
+    cred = CREDENTIALS_FILE
+    tok = TOKEN_FILE
+    # Fallback to repo seed if data-dir files are missing
+    if not cred.exists():
+        cred = ROOT / "credentials" / "credentials.json"
+    if not tok.exists():
+        tok = ROOT / "credentials" / "token.json"
+
     print("# Paste into Streamlit Community Cloud Secrets (TOML-safe)")
     print("# Remove any old GOOGLE_*_JSON lines that failed validation.")
     print()
@@ -28,12 +40,12 @@ def main() -> None:
         print('GOOGLE_CREDENTIALS_B64 = "%s"' % b64_file(cred))
         print()
     else:
-        print("# missing credentials/credentials.json")
+        print("# missing credentials.json — place OAuth client JSON first")
     if tok.exists():
         print('GOOGLE_TOKEN_B64 = "%s"' % b64_file(tok))
         print()
     else:
-        print("# missing credentials/token.json — run: python auth_drive.py")
+        print("# missing token.json — run: python auth_drive.py")
     out = ROOT / ".streamlit" / "secrets_cloud_snippet.toml"
     out.parent.mkdir(parents=True, exist_ok=True)
     lines = ["# Auto-generated — do not commit", ""]
@@ -46,6 +58,7 @@ def main() -> None:
     out.write_text("\n".join(lines), encoding="utf-8")
     print("Also wrote: %s" % out)
     print("(This file is gitignored if named under secrets*; keep it private.)")
+    print("Token path used: %s" % tok)
 
 
 if __name__ == "__main__":
