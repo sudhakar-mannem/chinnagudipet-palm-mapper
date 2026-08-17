@@ -232,27 +232,8 @@ def ensure_local_photo(
         service = get_drive_service(interactive=False)
         download_file(service, file_id, dest)
         return dest if dest.exists() else None
-    except Exception:
-        return None
-
-
-def fetch_drive_thumbnail_url(file_id: str) -> Optional[str]:
-    """Return a short-lived Drive thumbnail URL, or None."""
-    if not file_id:
-        return None
-    try:
-        service = get_drive_service(interactive=False)
-        meta = (
-            service.files()
-            .get(fileId=file_id, fields="thumbnailLink", supportsAllDrives=True)
-            .execute()
-        )
-        link = meta.get("thumbnailLink") or ""
-        if not link:
-            return None
-        if "=s" in link:
-            link = link.rsplit("=s", 1)[0] + "=s400"
-        return link
+    except DriveAuthRequired:
+        raise
     except Exception:
         return None
 

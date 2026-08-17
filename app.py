@@ -33,7 +33,6 @@ from config import (  # noqa: E402
 from services.drive import (  # noqa: E402
     DriveAuthRequired,
     ensure_local_photo,
-    fetch_drive_thumbnail_url,
     list_subfolders,
 )
 from services.models import (  # noqa: E402
@@ -142,44 +141,6 @@ def show_fast_image(path: Path, caption: str = "", max_side: int = 480) -> bool:
     # Fixed width avoids stretching huge originals through the Streamlit image pipeline
     st.image(data, caption=caption or None, width=min(max_side, 420))
     return True
-
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def load_drive_preview_bytes(file_id: str) -> Optional[bytes]:
-    """Fetch a small Drive preview (thumbnail) without downloading the full photo."""
-    if not file_id:
-        return None
-    try:
-        import urllib.request
-
-        url = fetch_drive_thumbnail_url(file_id)
-        if not url:
-            return None
-        req = urllib.request.Request(url, headers={"User-Agent": "PalmMapper/1.0"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            data = resp.read()
-        return data if data else None
-    except Exception:
-        return None
-
-
-def resolve_photo_preview(photo: PlantObservation):
-    """
-    Fast resolve order:
-    1) local file (no Drive download)
-    2) Drive thumbnail bytes
-    Returns (local_path_or_None, preview_bytes_or_None).
-    """
-    local = ensure_local_photo(
-        photo.file_id or "",
-        photo.file_name or "",
-        photo.local_path,
-        download=False,
-    )
-    if local and local.exists():
-        return local, None
-    preview = load_drive_preview_bytes(photo.file_id or "")
-    return None, preview
 
 
 def open_in_google_earth(path: Path) -> str:
@@ -292,7 +253,6 @@ def render_photo_panel(cluster: PlantCluster) -> None:
         or selected.file_id
         or Path(selected.file_name or "plant").stem
     )
-    # Isolate this plant's widgets so Streamlit does not reuse the previous plant's image UI
     panel = st.container()
     with panel:
         st.write(
@@ -329,65 +289,48 @@ def render_photo_panel(cluster: PlantCluster) -> None:
                     ("%.1f m" % photo.altitude) if photo.altitude is not None else "n/a",
                 )
             )
-            local, preview = resolve_photo_preview(photo)
+
+            # Prefer local cache; otherwise download this one photo from Drive
+            local = ensure_local_photo(
+                photo.file_id or "",
+                photo.file_name or "",
+                photo.local_path,
+                download=False,
+            )
+            if local is None or not local.exists():
+                try:
+                    with st.spinner("Loading photo from Drive…"):
+                        local = ensure_local_photo(
+                            photo.file_id or "",
+                            photo.file_name or "",
+                            photo.local_path,
+                            download=True,
+                        )
+                except DriveAuthRequired:
+                    st.warning(
+                        "Connect **Google Drive** (sidebar) so photos can download on demand."
+                    )
+                    if photo.photo_url:
+                        st.markdown("[Open in Google Drive](%s)" % photo.photo_url)
+                    continue
+
             if local and local.exists():
-                ok = show_fast_image(local, caption=photo.file_name or local.name, max_side=420)
+                ok = show_fast_image(
+                    local, caption=photo.file_name or local.name, max_side=420
+                )
                 if ok:
                     shown += 1
                 else:
-                    st.warning("Could not load preview")
-                with st.expander("Full-size image", expanded=False):
-                    # Reuse thumb-sized decode — avoid shipping multi-MB originals through Streamlit
+                    st.warning("Could not decode image preview")
+                with st.expander("Larger preview", expanded=False):
                     show_fast_image(local, caption="", max_side=900)
-            elif preview:
-                st.image(preview, caption=photo.file_name or "Drive preview", width=420)
-                shown += 1
-                download_key = "dl_photo_%s" % file_key
-                if st.button("Download full photo", key=download_key):
-                    with st.spinner("Downloading from Drive…"):
-                        got = ensure_local_photo(
-                            photo.file_id or "",
-                            photo.file_name or "",
-                            photo.local_path,
-                            download=True,
-                        )
-                    if got and got.exists():
-                        st.rerun()
-                    else:
-                        st.error("Download failed. Check Drive connection.")
             else:
-                # Auto-fetch only the latest photo so a map click still shows something
-                if idx == 0 and (photo.file_id or ""):
-                    with st.spinner("Loading latest photo…"):
-                        got = ensure_local_photo(
-                            photo.file_id or "",
-                            photo.file_name or "",
-                            photo.local_path,
-                            download=True,
-                        )
-                    if got and got.exists():
-                        ok = show_fast_image(
-                            got, caption=photo.file_name or got.name, max_side=420
-                        )
-                        if ok:
-                            shown += 1
-                            continue
-                st.info("Preview not cached yet.")
-                load_key = "load_photo_%s" % file_key
-                if st.button("Load photo from Drive", key=load_key, type="primary"):
-                    with st.spinner("Downloading from Drive…"):
-                        got = ensure_local_photo(
-                            photo.file_id or "",
-                            photo.file_name or "",
-                            photo.local_path,
-                            download=True,
-                        )
-                    if got and got.exists():
-                        st.rerun()
-                    else:
-                        st.error("Could not download. Connect Google Drive and try again.")
+                st.error("Could not download this photo from Drive.")
                 if photo.photo_url:
                     st.markdown("[Open in Google Drive](%s)" % photo.photo_url)
+                # Keep a manual retry with a unique key per file
+                if st.button("Retry download", key="retry_photo_%s" % file_key):
+                    st.rerun()
 
         if total > show_n:
             if st.button(
@@ -402,7 +345,7 @@ def render_photo_panel(cluster: PlantCluster) -> None:
                 st.rerun()
 
         if shown == 0 and total:
-            st.caption("Tip: connect Google Drive in the sidebar if previews stay empty.")
+            st.caption("If photos stay missing, reconnect Google Drive in the sidebar.")
 
 
 def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
