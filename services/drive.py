@@ -23,34 +23,75 @@ class DriveAuthRequired(RuntimeError):
     """Raised when interactive Google login is needed (do this via auth_drive.py)."""
 
 
+def _credentials_from_secrets_dict() -> Optional[Credentials]:
+    """Build Credentials directly from Streamlit secrets (no disk required)."""
+    try:
+        import base64
+        import streamlit as st
+
+        if not hasattr(st, "secrets"):
+            return None
+        raw = None
+        for key in ("GOOGLE_TOKEN_B64", "GOOGLE_TOKEN_JSON"):
+            try:
+                raw = st.secrets[key]
+            except Exception:
+                raw = None
+            if raw is not None and raw != "":
+                break
+        if raw is None or raw == "":
+            return None
+        if isinstance(raw, dict):
+            info = raw
+        else:
+            text = str(raw).strip()
+            try:
+                info = json.loads(text)
+            except Exception:
+                info = json.loads(base64.b64decode(text).decode("utf-8"))
+        return Credentials.from_authorized_user_info(info, DRIVE_SCOPES)
+    except Exception:
+        return None
+
+
 def get_credentials(interactive: bool = False) -> Credentials:
-    """Load/refresh Drive credentials. Interactive login only when interactive=True."""
+    """Load/refresh Drive credentials from Secrets/token file. Browser only if interactive=True."""
     ensure_dirs()
+    # Always re-apply Streamlit secrets into the writable credentials dir
+    try:
+        from config import reload_env
+
+        reload_env()
+    except Exception:
+        pass
+
     if not CREDENTIALS_FILE.exists():
         raise FileNotFoundError(
-            "Missing credentials/credentials.json.\n"
-            "Create a Desktop OAuth client in Google Cloud Console, enable the "
-            "Google Drive API, and save the JSON as credentials/credentials.json."
+            "Missing Google OAuth client credentials.\n"
+            "On Cloud: set GOOGLE_CREDENTIALS_B64 in Secrets.\n"
+            "Locally: save credentials/credentials.json (Desktop OAuth client)."
         )
 
     creds = None
     if TOKEN_FILE.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), DRIVE_SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), DRIVE_SCOPES)
+        except Exception:
+            creds = None
+    if creds is None:
+        creds = _credentials_from_secrets_dict()
 
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
         except Exception as refresh_exc:
             creds = None
-            # Stash for clearer Cloud/local messaging
             get_credentials._last_refresh_error = str(refresh_exc)
         else:
             get_credentials._last_refresh_error = ""
-            # Persist refreshed token when possible; keep in-memory creds even if write fails
             try:
                 TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
                 TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
-                # Keep repo seed in sync for make_cloud_secrets.py on local machines
                 try:
                     from config import _REPO_CREDENTIALS_DIR
 
@@ -65,22 +106,16 @@ def get_credentials(interactive: bool = False) -> Credentials:
     if not creds or not creds.valid:
         refresh_hint = getattr(get_credentials, "_last_refresh_error", "") or ""
         if not interactive:
-            detail = ""
-            if refresh_hint:
-                detail = "\nToken refresh failed: %s\n" % refresh_hint
+            detail = ("\nToken refresh failed: %s\n" % refresh_hint) if refresh_hint else "\n"
             raise DriveAuthRequired(
-                "Google Drive is not authenticated yet.%s"
-                "On Streamlit Cloud: your GOOGLE_TOKEN_B64 may be expired/revoked. "
-                "On your PC run:\n"
-                "  python auth_drive.py\n"
-                "  python make_cloud_secrets.py\n"
-                "Then paste the new B64 lines into Cloud Secrets, reboot, click Connect.\n"
-                "Locally: python auth_drive.py\n" % detail
+                "Google Drive Secrets token is missing or revoked.%s"
+                "Update GOOGLE_TOKEN_B64 in Streamlit Cloud Secrets "
+                "(on your PC: python auth_drive.py && python make_cloud_secrets.py), "
+                "then reboot the app." % detail
             )
         flow = InstalledAppFlow.from_client_secrets_file(
             str(CREDENTIALS_FILE), DRIVE_SCOPES
         )
-        # Fixed port is more reliable/faster than port=0 inside some environments
         try:
             creds = flow.run_local_server(
                 port=8090,

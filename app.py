@@ -476,6 +476,14 @@ def page_map_view() -> None:
     st.title("Farm map")
     st.caption("Click a plant marker to preview photos. Use **Plant Mapping** in the sidebar to sync new Drive folders.")
 
+    if not ensure_drive_from_secrets():
+        st.error(
+            "Photos will not load until Drive Secrets are valid. "
+            "Paste the latest `GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64` from "
+            "`.streamlit/secrets_cloud_snippet.toml` into **Manage app → Settings → Secrets**, "
+            "reboot, then click **Connect from Secrets**."
+        )
+
     clusters = load_all_clusters()
     health_filter = st.multiselect(
         "Filter by health",
