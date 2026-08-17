@@ -199,10 +199,15 @@ def download_file(service, file_id: str, dest: Path) -> Path:
     return dest
 
 
-def ensure_local_photo(file_id: str, file_name: str, local_path: Optional[str] = None) -> Optional[Path]:
+def ensure_local_photo(
+    file_id: str,
+    file_name: str,
+    local_path: Optional[str] = None,
+    download: bool = True,
+) -> Optional[Path]:
     """
-    Resolve a photo on disk. Remaps portable names to PHOTOS_DIR and
-    downloads from Drive when missing (used on Streamlit Cloud).
+    Resolve a photo on disk. Remaps portable names to PHOTOS_DIR.
+    Set download=False to skip Drive fetch (fast path for UI).
     """
     ensure_dirs()
     candidates = []
@@ -220,13 +225,34 @@ def ensure_local_photo(file_id: str, file_name: str, local_path: Optional[str] =
         except Exception:
             continue
 
-    if not file_id:
+    if not download or not file_id:
         return None
     dest = PHOTOS_DIR / safe_name
     try:
         service = get_drive_service(interactive=False)
         download_file(service, file_id, dest)
         return dest if dest.exists() else None
+    except Exception:
+        return None
+
+
+def fetch_drive_thumbnail_url(file_id: str) -> Optional[str]:
+    """Return a short-lived Drive thumbnail URL, or None."""
+    if not file_id:
+        return None
+    try:
+        service = get_drive_service(interactive=False)
+        meta = (
+            service.files()
+            .get(fileId=file_id, fields="thumbnailLink", supportsAllDrives=True)
+            .execute()
+        )
+        link = meta.get("thumbnailLink") or ""
+        if not link:
+            return None
+        if "=s" in link:
+            link = link.rsplit("=s", 1)[0] + "=s400"
+        return link
     except Exception:
         return None
 

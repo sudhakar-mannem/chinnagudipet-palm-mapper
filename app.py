@@ -30,7 +30,12 @@ from config import (  # noqa: E402
     openai_key_configured,
     reload_env,
 )
-from services.drive import DriveAuthRequired, list_subfolders  # noqa: E402
+from services.drive import (  # noqa: E402
+    DriveAuthRequired,
+    ensure_local_photo,
+    fetch_drive_thumbnail_url,
+    list_subfolders,
+)
 from services.models import (  # noqa: E402
     DEFAULT_PHOTO_RADIUS_M,
     PlantCluster,
@@ -139,6 +144,44 @@ def show_fast_image(path: Path, caption: str = "", max_side: int = 480) -> bool:
     return True
 
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_drive_preview_bytes(file_id: str) -> Optional[bytes]:
+    """Fetch a small Drive preview (thumbnail) without downloading the full photo."""
+    if not file_id:
+        return None
+    try:
+        import urllib.request
+
+        url = fetch_drive_thumbnail_url(file_id)
+        if not url:
+            return None
+        req = urllib.request.Request(url, headers={"User-Agent": "PalmMapper/1.0"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = resp.read()
+        return data if data else None
+    except Exception:
+        return None
+
+
+def resolve_photo_preview(photo: PlantObservation):
+    """
+    Fast resolve order:
+    1) local file (no Drive download)
+    2) Drive thumbnail bytes
+    Returns (local_path_or_None, preview_bytes_or_None).
+    """
+    local = ensure_local_photo(
+        photo.file_id or "",
+        photo.file_name or "",
+        photo.local_path,
+        download=False,
+    )
+    if local and local.exists():
+        return local, None
+    preview = load_drive_preview_bytes(photo.file_id or "")
+    return None, preview
+
+
 def open_in_google_earth(path: Path) -> str:
     if not path.exists():
         return "File not found: %s" % path
@@ -242,82 +285,124 @@ def load_all_clusters() -> List[PlantCluster]:
 
 
 def render_photo_panel(cluster: PlantCluster) -> None:
-    """Show plant photos as small cached thumbnails (paginated)."""
+    """Show plant photos as small cached thumbnails (paginated, plant-scoped keys)."""
     selected = cluster.representative
-    st.write(
-        "**%s** — %s · **%d** photo(s) within %.0f m"
-        % (
-            selected.plant_id or Path(selected.file_name).stem,
-            HEALTH_COLORS.get(selected.health, HEALTH_COLORS["white"])["label"],
-            cluster.photo_count,
-            cluster.radius_m,
-        )
+    plant_key = (
+        selected.plant_id
+        or selected.file_id
+        or Path(selected.file_name or "plant").stem
     )
-    if selected.source_folder_path:
-        st.caption(selected.source_folder_path)
-    if selected.summary:
-        st.caption(selected.summary)
-    if selected.altitude is not None:
-        st.caption("Altitude: %.1f m" % selected.altitude)
-
-    max_show = int(st.session_state.get("photo_page_size") or 3)
-    members = cluster.members
-    total = len(members)
-    show_n = min(max_show, total)
-
-    shown = 0
-    for idx, photo in enumerate(members[:show_n]):
-        st.markdown(
-            "**%s%d / %d** — `%s` · alt %s"
+    # Isolate this plant's widgets so Streamlit does not reuse the previous plant's image UI
+    panel = st.container()
+    with panel:
+        st.write(
+            "**%s** — %s · **%d** photo(s) within %.0f m"
             % (
-                "LATEST · " if idx == 0 else "",
-                idx + 1,
-                total,
-                photo.file_name,
-                ("%.1f m" % photo.altitude) if photo.altitude is not None else "n/a",
+                selected.plant_id or Path(selected.file_name).stem,
+                HEALTH_COLORS.get(selected.health, HEALTH_COLORS["white"])["label"],
+                cluster.photo_count,
+                cluster.radius_m,
             )
         )
-        local = Path(photo.local_path) if photo.local_path else None
-        # Remap / download for Cloud (Windows paths from local runs won't exist)
-        try:
-            from services.drive import ensure_local_photo
+        if selected.source_folder_path:
+            st.caption(selected.source_folder_path)
+        if selected.summary:
+            st.caption(selected.summary)
+        if selected.altitude is not None:
+            st.caption("Altitude: %.1f m" % selected.altitude)
 
-            resolved = ensure_local_photo(
-                photo.file_id or "",
-                photo.file_name or "",
-                photo.local_path,
+        max_show = int(st.session_state.get("photo_page_size") or 1)
+        members = cluster.members
+        total = len(members)
+        show_n = min(max_show, total)
+
+        shown = 0
+        for idx, photo in enumerate(members[:show_n]):
+            file_key = photo.file_id or ("%s_%d" % (plant_key, idx))
+            st.markdown(
+                "**%s%d / %d** — `%s` · alt %s"
+                % (
+                    "LATEST · " if idx == 0 else "",
+                    idx + 1,
+                    total,
+                    photo.file_name,
+                    ("%.1f m" % photo.altitude) if photo.altitude is not None else "n/a",
+                )
             )
-            if resolved is not None:
-                local = resolved
-        except Exception:
-            pass
-        if local and local.exists():
-            ok = show_fast_image(local, caption=local.name, max_side=480)
-            if ok:
+            local, preview = resolve_photo_preview(photo)
+            if local and local.exists():
+                ok = show_fast_image(local, caption=photo.file_name or local.name, max_side=420)
+                if ok:
+                    shown += 1
+                else:
+                    st.warning("Could not load preview")
+                with st.expander("Full-size image", expanded=False):
+                    # Reuse thumb-sized decode — avoid shipping multi-MB originals through Streamlit
+                    show_fast_image(local, caption="", max_side=900)
+            elif preview:
+                st.image(preview, caption=photo.file_name or "Drive preview", width=420)
                 shown += 1
+                download_key = "dl_photo_%s" % file_key
+                if st.button("Download full photo", key=download_key):
+                    with st.spinner("Downloading from Drive…"):
+                        got = ensure_local_photo(
+                            photo.file_id or "",
+                            photo.file_name or "",
+                            photo.local_path,
+                            download=True,
+                        )
+                    if got and got.exists():
+                        st.rerun()
+                    else:
+                        st.error("Download failed. Check Drive connection.")
             else:
-                st.warning("Could not load preview")
-            with st.expander("Full-size image", expanded=False):
-                try:
-                    st.image(str(local), **_IMAGE_WIDTH_KW)
-                except Exception as exc:
-                    st.caption("Full image unavailable: %s" % exc)
-        else:
-            st.warning("Missing on disk: %s" % (photo.local_path or "(no path)"))
-            if photo.photo_url:
-                st.markdown("[Open in Google Drive](%s)" % photo.photo_url)
+                # Auto-fetch only the latest photo so a map click still shows something
+                if idx == 0 and (photo.file_id or ""):
+                    with st.spinner("Loading latest photo…"):
+                        got = ensure_local_photo(
+                            photo.file_id or "",
+                            photo.file_name or "",
+                            photo.local_path,
+                            download=True,
+                        )
+                    if got and got.exists():
+                        ok = show_fast_image(
+                            got, caption=photo.file_name or got.name, max_side=420
+                        )
+                        if ok:
+                            shown += 1
+                            continue
+                st.info("Preview not cached yet.")
+                load_key = "load_photo_%s" % file_key
+                if st.button("Load photo from Drive", key=load_key, type="primary"):
+                    with st.spinner("Downloading from Drive…"):
+                        got = ensure_local_photo(
+                            photo.file_id or "",
+                            photo.file_name or "",
+                            photo.local_path,
+                            download=True,
+                        )
+                    if got and got.exists():
+                        st.rerun()
+                    else:
+                        st.error("Could not download. Connect Google Drive and try again.")
+                if photo.photo_url:
+                    st.markdown("[Open in Google Drive](%s)" % photo.photo_url)
 
-    if total > show_n:
-        if st.button("Show more photos (%d remaining)" % (total - show_n), key="more_photos"):
-            st.session_state["photo_page_size"] = show_n + 3
-            st.rerun()
-    elif total > 3:
-        if st.button("Show fewer photos", key="fewer_photos"):
-            st.session_state["photo_page_size"] = 3
-            st.rerun()
+        if total > show_n:
+            if st.button(
+                "Show more photos (%d remaining)" % (total - show_n),
+                key="more_photos_%s" % plant_key,
+            ):
+                st.session_state["photo_page_size"] = show_n + 1
+                st.rerun()
+        elif total > 1 and max_show > 1:
+            if st.button("Show fewer photos", key="fewer_photos_%s" % plant_key):
+                st.session_state["photo_page_size"] = 1
+                st.rerun()
 
-    if shown == 0 and total:
-        st.error("No photos could be displayed. Cache: `%s`" % CACHE_DIR)
+        if shown == 0 and total:
+            st.caption("Tip: connect Google Drive in the sidebar if previews stay empty.")
 
 
 def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
@@ -398,10 +483,21 @@ def page_map_view() -> None:
                 )
                 clicked = (map_state or {}).get("last_object_clicked")
                 if clicked and clicked.get("lat") is not None:
-                    st.session_state["selected_cluster_idx"] = nearest_cluster_index(
-                        clusters, float(clicked["lat"]), float(clicked["lng"])
+                    sig = (
+                        round(float(clicked["lat"]), 6),
+                        round(float(clicked["lng"]), 6),
                     )
-                    st.session_state["photo_page_size"] = 3
+                    # Only react to a new click — st_folium keeps returning the last click
+                    if st.session_state.get("_map_click_sig") != sig:
+                        idx = nearest_cluster_index(
+                            clusters, float(clicked["lat"]), float(clicked["lng"])
+                        )
+                        st.session_state["_map_click_sig"] = sig
+                        st.session_state["selected_cluster_idx"] = idx
+                        # Selectbox with a key ignores index= — sync state explicitly
+                        st.session_state["plant_select_main"] = idx
+                        st.session_state["photo_page_size"] = 1
+                        st.rerun()
         else:
             st.info(
                 "No mapped plants yet. Open **Plant Mapping** in the sidebar to connect Drive and run analysis."
@@ -427,15 +523,21 @@ def page_map_view() -> None:
         default_idx = int(st.session_state.get("selected_cluster_idx") or 0)
         if default_idx >= len(clusters):
             default_idx = 0
+        if "plant_select_main" not in st.session_state:
+            st.session_state["plant_select_main"] = default_idx
+        # Clamp if plant list shrank
+        if int(st.session_state["plant_select_main"]) >= len(clusters):
+            st.session_state["plant_select_main"] = 0
+
+        prev_choice = int(st.session_state.get("selected_cluster_idx") or 0)
         choice = st.selectbox(
             "Select plant",
             options=list(range(len(clusters))),
-            index=default_idx,
             format_func=lambda i: labels[i],
             key="plant_select_main",
         )
-        if choice != st.session_state.get("selected_cluster_idx"):
-            st.session_state["photo_page_size"] = 3
+        if choice != prev_choice:
+            st.session_state["photo_page_size"] = 1
         st.session_state["selected_cluster_idx"] = choice
         render_photo_panel(clusters[choice])
 
