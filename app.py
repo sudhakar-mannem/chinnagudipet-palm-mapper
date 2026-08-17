@@ -414,14 +414,16 @@ def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
     if not secret_status.get("credentials_written") and not CREDENTIALS_FILE.exists():
         st.error(
             "Missing `GOOGLE_CREDENTIALS_B64` in Secrets. "
-            "On your PC run `python make_cloud_secrets.py` and paste into Cloud Secrets."
+            "On your PC run `python make_cloud_secrets.py`, then paste into the "
+            "**Streamlit Cloud dashboard** (**Manage app → Settings → Secrets**, not inside this app)."
         )
         return
     if not secret_status.get("token_written") and not TOKEN_FILE.exists():
         st.error(
             "Missing `GOOGLE_TOKEN_B64` in Secrets. "
             "On your PC run `python auth_drive.py` once, then `python make_cloud_secrets.py`, "
-            "and paste both B64 lines into Cloud Secrets (no browser needed in the app)."
+            "and paste both B64 lines into the **Streamlit Cloud dashboard** "
+            "(**Manage app → Settings → Secrets**, not inside this app)."
         )
         with st.expander("Secrets status", expanded=True):
             st.write(secret_status)
@@ -478,11 +480,24 @@ def page_map_view() -> None:
 
     if not ensure_drive_from_secrets():
         st.error(
-            "Photos will not load until Drive Secrets are valid. "
-            "Paste the latest `GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64` from "
-            "`.streamlit/secrets_cloud_snippet.toml` into **Manage app → Settings → Secrets**, "
-            "reboot, then click **Connect from Secrets**."
+            "Photos need a valid Drive token in **Streamlit Cloud Secrets** "
+            "(this is **not** a menu inside the Palm Mapper app)."
         )
+        with st.expander("How to open Secrets (Streamlit Cloud)", expanded=True):
+            st.markdown(
+                """
+1. Open [https://share.streamlit.io](https://share.streamlit.io) and sign in  
+2. Find **chinnagudipet-palm-mapper** in your workspace  
+3. Click the **⋮** menu on the app → **Settings**  
+   (or open the live app → bottom-right **Manage app** → **Settings**)  
+4. Open the **Secrets** tab  
+5. Paste both lines from your PC file  
+   `palm_mapper/.streamlit/secrets_cloud_snippet.toml`  
+   (`GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64`)  
+6. Click **Save**, then **Reboot app**  
+7. Back in Palm Mapper → **Plant Mapping** → **Connect from Secrets**
+"""
+            )
 
     clusters = load_all_clusters()
     health_filter = st.multiselect(
@@ -636,9 +651,11 @@ def page_plant_mapping() -> None:
         )
         if not ready:
             st.warning(
-                "Add `GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64` to Cloud Secrets "
-                "(from `python make_cloud_secrets.py` on your PC), reboot, then click "
-                "**Connect from Secrets**. The app never opens a Google login browser."
+                "Add `GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64` in the "
+                "**Streamlit Cloud dashboard** (**Manage app → Settings → Secrets**, "
+                "not inside this app) — from `python make_cloud_secrets.py` on your PC — "
+                "reboot, then click **Connect from Secrets**. "
+                "The app never opens a Google login browser."
             )
 
     st.subheader("Google Drive (Secrets)")
