@@ -39,6 +39,7 @@ from services.drive import (  # noqa: E402
 )
 from services.models import (  # noqa: E402
     DEFAULT_PHOTO_RADIUS_M,
+    DEFAULT_PLANT_SPACING_M,
     PlantCluster,
     PlantObservation,
     cluster_by_radius,
@@ -163,11 +164,11 @@ def open_in_google_earth(path: Path) -> str:
 
 
 def build_map(clusters: List[PlantCluster]):
-    mapped = [c for c in clusters if c.representative.latitude is not None]
+    mapped = [c for c in clusters if c.representative.map_latitude is not None]
     if not mapped:
         return None
-    center_lat = sum(c.representative.latitude for c in mapped) / len(mapped)
-    center_lon = sum(c.representative.longitude for c in mapped) / len(mapped)
+    center_lat = sum(float(c.representative.map_latitude) for c in mapped) / len(mapped)
+    center_lon = sum(float(c.representative.map_longitude) for c in mapped) / len(mapped)
     fmap = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=17,
@@ -207,10 +208,13 @@ def build_map(clusters: List[PlantCluster]):
         # Dark text on light markers; white text on saturated health colors
         fg = "#111" if p.health in ("white", "amber") else "#fff"
         label = HEALTH_COLORS.get(p.health, HEALTH_COLORS["white"])["label"]
+        gps_note = ""
+        if p.latitude is not None and p.longitude is not None:
+            gps_note = "<br/>GPS: %.6f, %.6f" % (float(p.latitude), float(p.longitude))
         popup = folium.Popup(
-            "<b>#%d</b> %s<br/>%s<br/>%d photo(s) — see panel →"
-            % (n, html.escape(title), label, c.photo_count),
-            max_width=220,
+            "<b>#%d</b> %s<br/>%s<br/>%d photo(s) — see panel →%s"
+            % (n, html.escape(title), label, c.photo_count, gps_note),
+            max_width=260,
         )
         icon_html = (
             '<div style="background:%s;border:1px solid #111;border-radius:50%%;'
@@ -220,7 +224,7 @@ def build_map(clusters: List[PlantCluster]):
             "%d</div>"
         ) % (color, fg, n)
         folium.Marker(
-            location=[p.latitude, p.longitude],
+            location=[p.map_latitude, p.map_longitude],
             popup=popup,
             tooltip="#%d · %s · %d photos" % (n, title, c.photo_count),
             icon=DivIcon(
@@ -240,9 +244,9 @@ def nearest_cluster_index(clusters, lat, lon):
     best_d = 1e18
     for i, c in enumerate(clusters):
         p = c.representative
-        if p.latitude is None or p.longitude is None:
+        if p.map_latitude is None or p.map_longitude is None:
             continue
-        d = haversine_m(lat, lon, float(p.latitude), float(p.longitude))
+        d = haversine_m(lat, lon, float(p.map_latitude), float(p.map_longitude))
         if d < best_d:
             best_d = d
             best_i = i
@@ -252,10 +256,18 @@ def nearest_cluster_index(clusters, lat, lon):
 def load_all_clusters() -> List[PlantCluster]:
     state_mtime = STATE_PATH.stat().st_mtime if STATE_PATH.exists() else 0.0
     all_obs = observations_from_state(state_mtime)
-    return cluster_by_radius(
+    clusters = cluster_by_radius(
         [o for o in all_obs if o.latitude is not None],
         radius_m=DEFAULT_PHOTO_RADIUS_M,
     )
+    # Ensure display positions exist (e.g. older state without realignment).
+    if clusters and not any(
+        c.representative.display_latitude is not None for c in clusters
+    ):
+        from services.models import apply_lattice_to_clusters
+
+        apply_lattice_to_clusters(clusters, spacing_m=DEFAULT_PLANT_SPACING_M)
+    return clusters
 
 
 def render_photo_panel(cluster: PlantCluster) -> None:
@@ -283,6 +295,20 @@ def render_photo_panel(cluster: PlantCluster) -> None:
             st.caption(selected.summary)
         if selected.altitude is not None:
             st.caption("Altitude: %.1f m" % selected.altitude)
+        if selected.latitude is not None and selected.longitude is not None:
+            st.caption(
+                "Original GPS: %.6f, %.6f"
+                % (float(selected.latitude), float(selected.longitude))
+            )
+        if selected.display_latitude is not None and selected.display_longitude is not None:
+            st.caption(
+                "Map position (%.0f m spacing): %.6f, %.6f"
+                % (
+                    DEFAULT_PLANT_SPACING_M,
+                    float(selected.display_latitude),
+                    float(selected.display_longitude),
+                )
+            )
 
         max_show = int(st.session_state.get("photo_page_size") or 1)
         members = cluster.members
@@ -917,8 +943,12 @@ def page_plant_mapping() -> None:
                 rebuilt = rebuild_consolidated_exports()
                 observations_from_state.clear()
                 st.success(
-                    "Rebuilt **%d** plants → `%s`"
-                    % (rebuilt["plants_consolidated"], rebuilt["consolidated_kml_path"])
+                    "Rebuilt **%d** plants (%.0f m spacing) → `%s`"
+                    % (
+                        rebuilt["plants_consolidated"],
+                        rebuilt.get("plant_spacing_m", DEFAULT_PLANT_SPACING_M),
+                        rebuilt["consolidated_kml_path"],
+                    )
                 )
             except Exception as exc:
                 st.exception(exc)
@@ -935,6 +965,8 @@ def page_plant_mapping() -> None:
                 "confidence": round(c.representative.confidence or 0, 2),
                 "latitude": c.representative.latitude,
                 "longitude": c.representative.longitude,
+                "display_latitude": c.representative.display_latitude,
+                "display_longitude": c.representative.display_longitude,
                 "altitude_m": c.representative.altitude,
                 "summary": c.representative.summary,
                 "latest_file": c.representative.file_name,

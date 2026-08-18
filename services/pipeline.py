@@ -10,7 +10,13 @@ from config import OUTPUT_DIR, STATE_PATH, ensure_dirs
 from services.analyze import analyze_photo_with_ai, resolve_coordinates
 from services.drive import sync_photos
 from services.kml_builder import write_kml, write_kmz
-from services.models import PlantObservation, cluster_by_radius, group_latest_by_plant
+from services.models import (
+    DEFAULT_PHOTO_RADIUS_M,
+    DEFAULT_PLANT_SPACING_M,
+    PlantObservation,
+    apply_lattice_to_clusters,
+    cluster_by_radius,
+)
 
 
 ProgressCb = Optional[Callable[[str, float], None]]
@@ -202,9 +208,19 @@ def run_pipeline(
         analyzed_now += 1
 
     observations = list(existing.values())
+    # Cluster on original GPS, then logical ~9 m lattice for map/KML display.
+    all_geo = [
+        o for o in observations if o.latitude is not None and o.longitude is not None
+    ]
+    consolidated_clusters = cluster_by_radius(all_geo)
+    plants_realigned = apply_lattice_to_clusters(
+        consolidated_clusters, spacing_m=DEFAULT_PLANT_SPACING_M
+    )
     state["observations"] = [o.to_dict() for o in observations]
     state["updated_at"] = datetime.now(timezone.utc).isoformat()
     state["last_selected_folder_ids"] = list(folder_ids or [])
+    state["plant_spacing_m"] = DEFAULT_PLANT_SPACING_M
+    state["plants_realigned"] = plants_realigned
     save_state(state)
 
     # Map/export this run — cluster so each icon shows all photos within 4 m
@@ -213,15 +229,15 @@ def run_pipeline(
         o for o in run_obs if o.latitude is not None and o.longitude is not None
     ]
     run_clusters = cluster_by_radius(run_geo)
+    # Display coords already set on shared observation objects via consolidated pass.
     mapped = [c.representative for c in run_clusters]
-
-    all_geo = [
-        o for o in observations if o.latitude is not None and o.longitude is not None
-    ]
-    consolidated_clusters = cluster_by_radius(all_geo)
     consolidated = [c.representative for c in consolidated_clusters]
 
-    report("Writing KML / KMZ (4 m photo galleries)…", 0.92)
+    report(
+        "Writing KML / KMZ (4 m galleries, %.0f m plant spacing)…"
+        % DEFAULT_PLANT_SPACING_M,
+        0.92,
+    )
     title = "Palm Plant Health"
     if folder_paths:
         title = "Palm Plant Health (%s)" % ", ".join(
@@ -261,7 +277,8 @@ def run_pipeline(
             {
                 "run_at": datetime.now(timezone.utc).isoformat(),
                 "selected_folders": sorted(set(folder_paths.values())) if folder_paths else [],
-                "radius_m": 4.0,
+                "radius_m": DEFAULT_PHOTO_RADIUS_M,
+                "plant_spacing_m": DEFAULT_PLANT_SPACING_M,
                 "plants": [
                     {
                         "representative": c.representative.to_dict(),
@@ -314,7 +331,9 @@ def run_pipeline(
                     "plants_this_run": len(mapped),
                     "photos_this_run": len(run_geo),
                     "plants_consolidated": len(consolidated),
-                    "radius_m": 4.0,
+                    "radius_m": DEFAULT_PHOTO_RADIUS_M,
+                    "plant_spacing_m": DEFAULT_PLANT_SPACING_M,
+                    "plants_realigned": plants_realigned,
                     "run_kml": str(run_kml),
                     "consolidated_kml": str(consolidated_kml),
                 }
@@ -329,6 +348,7 @@ def run_pipeline(
         "total_observations": len(observations),
         "plants_on_map": len(mapped),
         "plants_consolidated": len(consolidated),
+        "plants_realigned": plants_realigned,
         "missing_coordinates": len(run_obs) - len(run_geo),
         "selected_folders": sorted(set(folder_paths.values())) if folder_paths else [],
         "kml_path": str(kml_path),
@@ -349,14 +369,17 @@ def run_pipeline(
             }
             for c in run_clusters
         ],
-        "radius_m": 4.0,
+        "radius_m": DEFAULT_PHOTO_RADIUS_M,
+        "plant_spacing_m": DEFAULT_PLANT_SPACING_M,
         "run_file_ids": list(run_file_ids),
     }
     report("Done", 1.0)
     return summary
 
 
-def rebuild_consolidated_exports() -> Dict[str, Any]:
+def rebuild_consolidated_exports(
+    spacing_m: float = DEFAULT_PLANT_SPACING_M,
+) -> Dict[str, Any]:
     """Rebuild consolidated KML/KMZ/JSON from all stored observations."""
     ensure_dirs()
     state = load_state()
@@ -365,9 +388,16 @@ def rebuild_consolidated_exports() -> Dict[str, Any]:
         o for o in observations if o.latitude is not None and o.longitude is not None
     ]
     clusters = cluster_by_radius(all_geo)
+    plants_realigned = apply_lattice_to_clusters(clusters, spacing_m=spacing_m)
+    state["observations"] = [o.to_dict() for o in observations]
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    state["plant_spacing_m"] = spacing_m
+    state["plants_realigned"] = plants_realigned
+    save_state(state)
+
     title = "Palm Plant Health (consolidated — all runs)"
-    kml = write_kml(all_geo, out_path=OUTPUT_DIR / "palm_health_consolidated.kml", title=title)
-    kmz = write_kmz(all_geo, out_path=OUTPUT_DIR / "palm_health_consolidated.kmz", title=title)
+    kml = write_kml(clusters, out_path=OUTPUT_DIR / "palm_health_consolidated.kml", title=title)
+    kmz = write_kmz(clusters, out_path=OUTPUT_DIR / "palm_health_consolidated.kmz", title=title)
     json_path = OUTPUT_DIR / "palm_health_consolidated.json"
     json_path.write_text(
         json.dumps(
@@ -376,6 +406,7 @@ def rebuild_consolidated_exports() -> Dict[str, Any]:
                     "representative": c.representative.to_dict(),
                     "photo_count": c.photo_count,
                     "radius_m": c.radius_m,
+                    "plant_spacing_m": spacing_m,
                     "photos": [m.to_dict() for m in c.members],
                 }
                 for c in clusters
@@ -387,11 +418,13 @@ def rebuild_consolidated_exports() -> Dict[str, Any]:
     return {
         "plants_consolidated": len(clusters),
         "photos_consolidated": len(all_geo),
+        "plants_realigned": plants_realigned,
         "consolidated_kml_path": str(kml),
         "consolidated_kmz_path": str(kmz),
         "consolidated_json_path": str(json_path),
         "health_counts": _health_counts([c.representative for c in clusters]),
-        "radius_m": 4.0,
+        "radius_m": DEFAULT_PHOTO_RADIUS_M,
+        "plant_spacing_m": spacing_m,
     }
 
 def _health_counts(observations: List[PlantObservation]) -> Dict[str, int]:

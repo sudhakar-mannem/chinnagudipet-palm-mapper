@@ -13,6 +13,7 @@ from xml.sax.saxutils import escape
 from config import HEALTH_COLORS, ICON_URLS, OUTPUT_DIR, ensure_dirs
 from services.models import (
     DEFAULT_PHOTO_RADIUS_M,
+    DEFAULT_PLANT_SPACING_M,
     PlantCluster,
     PlantObservation,
     cluster_by_radius,
@@ -73,8 +74,23 @@ def _balloon_html(
         "<b>%s</b><br/>" % name,
         "Latest: %s (%.0f%%)<br/>" % (label, (obs.confidence or 0) * 100),
         "%s<br/>" % summary,
-        "Photos within %.0f m: %d<br/><hr/>" % (radius, len(cluster.members)),
+        "Photos within %.0f m: %d<br/>" % (radius, len(cluster.members)),
     ]
+    if obs.latitude is not None and obs.longitude is not None:
+        lines.append(
+            "Original GPS: %.6f, %.6f<br/>"
+            % (float(obs.latitude), float(obs.longitude))
+        )
+    if obs.display_latitude is not None and obs.display_longitude is not None:
+        lines.append(
+            "Map position (%.0f m spacing): %.6f, %.6f<br/>"
+            % (
+                DEFAULT_PLANT_SPACING_M,
+                float(obs.display_latitude),
+                float(obs.display_longitude),
+            )
+        )
+    lines.append("<hr/>")
     for i, member in enumerate(cluster.members):
         href = _image_href(member, image_mode, file_map=file_map)
         alt = (
@@ -116,7 +132,7 @@ def build_kml(
     placemarks = []
     for cluster in clusters:
         obs = cluster.representative
-        if obs.latitude is None or obs.longitude is None:
+        if obs.map_latitude is None or obs.map_longitude is None:
             continue
         health = obs.health if obs.health in ICON_URLS else "white"
         name = escape(obs.plant_id or Path(obs.file_name).stem)
@@ -142,8 +158,8 @@ def build_kml(
                 "health": health,
                 "count": cluster.photo_count,
                 "radius": radius_m,
-                "lon": obs.longitude,
-                "lat": obs.latitude,
+                "lon": obs.map_longitude,
+                "lat": obs.map_latitude,
                 "alt": alt,
             }
         )
@@ -291,13 +307,19 @@ def _build_kml_absolute(
     placemarks = []
     for cluster in clusters:
         obs = cluster.representative
-        if obs.latitude is None or obs.longitude is None:
+        if obs.map_latitude is None or obs.map_longitude is None:
             continue
         label = escape(obs.plant_id or Path(obs.file_name).stem)
         lines = [
             "<b>%s</b><br/>" % label,
-            "Photos within %.0f m: %d<br/><hr/>" % (radius_m, len(cluster.members)),
+            "Photos within %.0f m: %d<br/>" % (radius_m, len(cluster.members)),
         ]
+        if obs.latitude is not None and obs.longitude is not None:
+            lines.append(
+                "Original GPS: %.6f, %.6f<br/>"
+                % (float(obs.latitude), float(obs.longitude))
+            )
+        lines.append("<hr/>")
         for i, member in enumerate(cluster.members):
             href = abs_map.get(member.file_id) or ""
             lines.append(
@@ -326,8 +348,8 @@ def _build_kml_absolute(
                 "name": label,
                 "balloon": balloon,
                 "icon": icon_href,
-                "lon": obs.longitude,
-                "lat": obs.latitude,
+                "lon": obs.map_longitude,
+                "lat": obs.map_latitude,
                 "alt": alt,
             }
         )
