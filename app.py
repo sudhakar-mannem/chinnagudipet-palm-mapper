@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import io
 import os
 import sys
@@ -13,6 +14,7 @@ import pandas as pd
 import streamlit as st
 from PIL import Image
 from streamlit_folium import st_folium
+from folium.features import DivIcon
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -160,6 +162,14 @@ def open_in_google_earth(path: Path) -> str:
         return "Could not open Google Earth (%s). Open the file manually: %s" % (exc, path)
 
 
+def _short_plant_label(text: str, max_len: int = 5) -> str:
+    """Compact label for marker icons; truncate long plant ids / filenames."""
+    text = (text or "").strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
 def build_map(clusters: List[PlantCluster]):
     mapped = [c for c in clusters if c.representative.latitude is not None]
     if not mapped:
@@ -202,22 +212,32 @@ def build_map(clusters: List[PlantCluster]):
         p = c.representative
         color = HEALTH_COLORS.get(p.health, HEALTH_COLORS["white"])["hex"]
         title = p.plant_id or Path(p.file_name).stem
+        short = _short_plant_label(title)
+        # Dark text on light markers; white text on saturated health colors
+        fg = "#111" if p.health in ("white", "amber") else "#fff"
         label = HEALTH_COLORS.get(p.health, HEALTH_COLORS["white"])["label"]
         popup = folium.Popup(
             "<b>%s</b><br/>%s<br/>%d photo(s) — see panel →"
-            % (title, label, c.photo_count),
+            % (html.escape(title), label, c.photo_count),
             max_width=220,
         )
-        folium.CircleMarker(
+        icon_html = (
+            '<div style="background:%s;border:1px solid #111;border-radius:50%%;'
+            "width:22px;height:22px;display:flex;align-items:center;"
+            "justify-content:center;font-size:8px;font-weight:700;color:%s;"
+            'line-height:1;font-family:Arial,sans-serif;box-sizing:border-box;">'
+            "%s</div>"
+        ) % (color, fg, html.escape(short))
+        folium.Marker(
             location=[p.latitude, p.longitude],
-            radius=8,
-            color="#111",
-            weight=1,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.92,
             popup=popup,
             tooltip="%s · %d photos" % (title, c.photo_count),
+            icon=DivIcon(
+                html=icon_html,
+                icon_size=(22, 22),
+                icon_anchor=(11, 11),
+                class_name="plant-num-marker",
+            ),
         ).add_to(fmap)
 
     folium.LayerControl().add_to(fmap)
