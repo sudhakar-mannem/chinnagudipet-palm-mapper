@@ -162,14 +162,6 @@ def open_in_google_earth(path: Path) -> str:
         return "Could not open Google Earth (%s). Open the file manually: %s" % (exc, path)
 
 
-def _short_plant_label(text: str, max_len: int = 5) -> str:
-    """Compact label for marker icons; truncate long plant ids / filenames."""
-    text = (text or "").strip()
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 1] + "…"
-
-
 def build_map(clusters: List[PlantCluster]):
     mapped = [c for c in clusters if c.representative.latitude is not None]
     if not mapped:
@@ -208,17 +200,16 @@ def build_map(clusters: List[PlantCluster]):
         control=True,
     ).add_to(fmap)
 
-    for c in mapped:
+    for n, c in enumerate(mapped, start=1):
         p = c.representative
         color = HEALTH_COLORS.get(p.health, HEALTH_COLORS["white"])["hex"]
         title = p.plant_id or Path(p.file_name).stem
-        short = _short_plant_label(title)
         # Dark text on light markers; white text on saturated health colors
         fg = "#111" if p.health in ("white", "amber") else "#fff"
         label = HEALTH_COLORS.get(p.health, HEALTH_COLORS["white"])["label"]
         popup = folium.Popup(
-            "<b>%s</b><br/>%s<br/>%d photo(s) — see panel →"
-            % (html.escape(title), label, c.photo_count),
+            "<b>#%d</b> %s<br/>%s<br/>%d photo(s) — see panel →"
+            % (n, html.escape(title), label, c.photo_count),
             max_width=220,
         )
         icon_html = (
@@ -226,12 +217,12 @@ def build_map(clusters: List[PlantCluster]):
             "width:22px;height:22px;display:flex;align-items:center;"
             "justify-content:center;font-size:8px;font-weight:700;color:%s;"
             'line-height:1;font-family:Arial,sans-serif;box-sizing:border-box;">'
-            "%s</div>"
-        ) % (color, fg, html.escape(short))
+            "%d</div>"
+        ) % (color, fg, n)
         folium.Marker(
             location=[p.latitude, p.longitude],
             popup=popup,
-            tooltip="%s · %d photos" % (title, c.photo_count),
+            tooltip="#%d · %s · %d photos" % (n, title, c.photo_count),
             icon=DivIcon(
                 html=icon_html,
                 icon_size=(22, 22),
@@ -586,8 +577,9 @@ def page_map_view() -> None:
         for i, c in enumerate(clusters):
             p = c.representative
             labels.append(
-                "%s | %s | %d photo(s)"
+                "#%d | %s | %s | %d photo(s)"
                 % (
+                    i + 1,
                     p.plant_id or Path(p.file_name).stem,
                     p.health,
                     c.photo_count,
