@@ -740,25 +740,40 @@ def _read_device_gps():
     """
     High-accuracy browser GPS for mobile Near me.
 
-    streamlit-geolocation does not request enableHighAccuracy, so phones often
-    return coarse network location (±100–500 m) which cannot match 2 m plant
-    spacing. We use navigator.geolocation with enableHighAccuracy and write
-    the fix into URL query params (works on Streamlit Cloud HTTPS).
+    Geolocation must run on the parent page (not the components.html iframe),
+    otherwise many phones only return coarse network location (±500–2000 m).
+    Result is written to URL query params on the parent window.
     """
     import streamlit.components.v1 as components
 
     params = st.query_params
+    fail_q = params.get("gps_fail")
     lat_q = params.get("gps_lat")
     lon_q = params.get("gps_lon")
     acc_q = params.get("gps_acc")
+
+    if fail_q:
+        try:
+            acc_fail = float(acc_q if not isinstance(acc_q, list) else acc_q[0]) if acc_q else 0.0
+        except (TypeError, ValueError):
+            acc_fail = 0.0
+        st.error(t("gps_coarse_fail", acc_fail))
+        st.info(t("gps_phone_tips"))
+        st.session_state["near_me_gps_armed"] = False
 
     st.caption(t("gps_howto"))
     if st.button(
         t("get_precise_gps"), type="primary", use_container_width=True, key="near_me_gps_btn"
     ):
         st.session_state["near_me_gps_armed"] = True
+        # Clear previous fail flag so a new attempt can proceed
+        try:
+            if "gps_fail" in st.query_params:
+                del st.query_params["gps_fail"]
+        except Exception:
+            pass
 
-    if st.session_state.get("near_me_gps_armed"):
+    if st.session_state.get("near_me_gps_armed") and not fail_q:
         components.html(
             """
             <div id="gps-status" style="font-family:sans-serif;font-size:14px;padding:8px 0;">
@@ -770,21 +785,48 @@ def _read_device_gps():
               const msgGood = %s;
               const msgWait = %s;
               const errPrefix = %s;
+              const noGeo = %s;
               function fail(msg) {
                 if (status) status.textContent = msg;
               }
-              if (!navigator.geolocation) {
-                fail(%s);
+              function applyToParent(best, failed) {
+                try {
+                  const u = new URL(window.parent.location.href);
+                  if (failed) {
+                    u.searchParams.set("gps_fail", "coarse");
+                    u.searchParams.set("gps_acc", String(best ? best.accuracy : 9999));
+                    u.searchParams.delete("gps_lat");
+                    u.searchParams.delete("gps_lon");
+                  } else {
+                    u.searchParams.delete("gps_fail");
+                    u.searchParams.set("gps_lat", String(best.latitude));
+                    u.searchParams.set("gps_lon", String(best.longitude));
+                    u.searchParams.set("gps_acc", String(best.accuracy));
+                  }
+                  window.parent.location.href = u.toString();
+                } catch (e) {
+                  fail(String(e));
+                }
+              }
+              // Critical: use PARENT navigator — iframe geolocation is often coarse-only
+              const geoHost = (window.parent && window.parent.navigator &&
+                               window.parent.navigator.geolocation)
+                ? window.parent.navigator.geolocation
+                : navigator.geolocation;
+              if (!geoHost) {
+                fail(noGeo);
                 return;
               }
               const opts = {
                 enableHighAccuracy: true,
                 maximumAge: 0,
-                timeout: 60000
+                timeout: 90000
               };
               let best = null;
-              const watchId = navigator.geolocation.watchPosition(
+              let samples = 0;
+              const watchId = geoHost.watchPosition(
                 function (pos) {
+                  samples += 1;
                   const c = pos.coords;
                   const fix = {
                     latitude: c.latitude,
@@ -796,17 +838,13 @@ def _read_device_gps():
                   }
                   if (status) {
                     status.textContent =
-                      "GPS ±" + Math.round(fix.accuracy) + " m — " +
-                      (fix.accuracy <= 15 ? msgGood : msgWait);
+                      "GPS ±" + Math.round(best.accuracy) + " m — " +
+                      (best.accuracy <= 20 ? msgGood : msgWait) +
+                      " (" + samples + ")";
                   }
-                  // Accept when accurate enough, or after we have any improving fix under 40 m
-                  if (fix.accuracy <= 15 || (best && best.accuracy <= 40 && fix.accuracy === best.accuracy)) {
-                    navigator.geolocation.clearWatch(watchId);
-                    const u = new URL(window.parent.location.href);
-                    u.searchParams.set("gps_lat", String(best.latitude));
-                    u.searchParams.set("gps_lon", String(best.longitude));
-                    u.searchParams.set("gps_acc", String(best.accuracy));
-                    window.parent.location.href = u.toString();
+                  if (best.accuracy <= 20) {
+                    try { geoHost.clearWatch(watchId); } catch (e) {}
+                    applyToParent(best, false);
                   }
                 },
                 function (err) {
@@ -814,16 +852,20 @@ def _read_device_gps():
                 },
                 opts
               );
-              // Safety: after 25s take the best fix we have
+              // After 35s: accept if <= 50 m, else fail (don't use ±2000 m fixes)
               setTimeout(function () {
-                if (!best) return;
-                try { navigator.geolocation.clearWatch(watchId); } catch (e) {}
-                const u = new URL(window.parent.location.href);
-                u.searchParams.set("gps_lat", String(best.latitude));
-                u.searchParams.set("gps_lon", String(best.longitude));
-                u.searchParams.set("gps_acc", String(best.accuracy));
-                window.parent.location.href = u.toString();
-              }, 25000);
+                try { geoHost.clearWatch(watchId); } catch (e) {}
+                if (!best) {
+                  fail(errPrefix + "timeout");
+                  applyToParent(null, true);
+                  return;
+                }
+                if (best.accuracy <= 50) {
+                  applyToParent(best, false);
+                } else {
+                  applyToParent(best, true);
+                }
+              }, 35000);
             })();
             </script>
             """
@@ -834,9 +876,11 @@ def _read_device_gps():
                 json.dumps(t("gps_error_prefix"), ensure_ascii=False),
                 json.dumps(t("gps_no_geolocation"), ensure_ascii=False),
             ),
-            height=70,
+            height=72,
         )
 
+    if fail_q:
+        return None, None, None
     if lat_q is None or lon_q is None:
         return None, None, None
     try:
@@ -869,7 +913,7 @@ def page_near_me() -> None:
         try:
             st.query_params.clear()
         except Exception:
-            for key in ("gps_lat", "gps_lon", "gps_acc"):
+            for key in ("gps_lat", "gps_lon", "gps_acc", "gps_fail"):
                 try:
                     del st.query_params[key]
                 except Exception:
