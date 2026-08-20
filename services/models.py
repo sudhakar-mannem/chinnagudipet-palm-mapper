@@ -39,6 +39,8 @@ class PlantObservation:
     source: str = "drive"
     source_folder_id: str = ""
     source_folder_path: str = ""
+    # When True, keep observation (and original GPS) but hide from map/KML/select.
+    excluded_from_map: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -338,6 +340,30 @@ def cluster_by_radius(
         cluster.members.sort(key=lambda o: o.modified_time or "", reverse=True)
         cluster.representative = cluster.members[0]
     return clusters
+
+
+def observation_excluded_from_map(
+    obs: PlantObservation,
+    excluded_file_ids: Optional[Sequence[str]] = None,
+) -> bool:
+    """True when this photo should not appear on Map View / consolidated exports."""
+    if obs.excluded_from_map:
+        return True
+    if excluded_file_ids and obs.file_id and obs.file_id in excluded_file_ids:
+        return True
+    return False
+
+
+def filter_map_observations(
+    observations: Sequence[PlantObservation],
+    excluded_file_ids: Optional[Sequence[str]] = None,
+) -> List[PlantObservation]:
+    """Drop map outliers while retaining them in stored state."""
+    return [
+        o
+        for o in observations
+        if not observation_excluded_from_map(o, excluded_file_ids=excluded_file_ids)
+    ]
 
 
 def group_latest_by_plant(

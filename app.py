@@ -24,6 +24,7 @@ from config import (  # noqa: E402
     CACHE_DIR,
     CREDENTIALS_FILE,
     DRIVE_FOLDER_ID,
+    EXCLUDED_OUTLIER_FILE_IDS,
     HEALTH_COLORS,
     OUTPUT_DIR,
     STATE_PATH,
@@ -43,6 +44,7 @@ from services.models import (  # noqa: E402
     PlantCluster,
     PlantObservation,
     cluster_by_radius,
+    filter_map_observations,
     haversine_m,
 )
 from services.pipeline import load_state, run_pipeline  # noqa: E402
@@ -256,10 +258,12 @@ def nearest_cluster_index(clusters, lat, lon):
 def load_all_clusters() -> List[PlantCluster]:
     state_mtime = STATE_PATH.stat().st_mtime if STATE_PATH.exists() else 0.0
     all_obs = observations_from_state(state_mtime)
-    clusters = cluster_by_radius(
+    # Drop durable map outliers (photos retained in state with GPS).
+    map_obs = filter_map_observations(
         [o for o in all_obs if o.latitude is not None],
-        radius_m=DEFAULT_PHOTO_RADIUS_M,
+        excluded_file_ids=EXCLUDED_OUTLIER_FILE_IDS,
     )
+    clusters = cluster_by_radius(map_obs, radius_m=DEFAULT_PHOTO_RADIUS_M)
     # Ensure display positions exist (e.g. older state without realignment).
     if clusters and not any(
         c.representative.display_latitude is not None for c in clusters

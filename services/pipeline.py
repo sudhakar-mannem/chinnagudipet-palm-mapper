@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from config import OUTPUT_DIR, STATE_PATH, ensure_dirs
+from config import EXCLUDED_OUTLIER_FILE_IDS, OUTPUT_DIR, STATE_PATH, ensure_dirs
 from services.analyze import analyze_photo_with_ai, resolve_coordinates
 from services.drive import sync_photos
 from services.kml_builder import write_kml, write_kmz
@@ -16,6 +16,7 @@ from services.models import (
     PlantObservation,
     apply_lattice_to_clusters,
     cluster_by_radius,
+    filter_map_observations,
 )
 
 
@@ -208,10 +209,19 @@ def run_pipeline(
         analyzed_now += 1
 
     observations = list(existing.values())
-    # Cluster on original GPS, then logical ~9 m lattice for map/KML display.
-    all_geo = [
-        o for o in observations if o.latitude is not None and o.longitude is not None
-    ]
+    # Preserve prior map-outlier flags across re-analysis of the same file_id.
+    for obs in observations:
+        if obs.file_id in EXCLUDED_OUTLIER_FILE_IDS:
+            obs.excluded_from_map = True
+    # Cluster on original GPS (excluding map outliers), then ~9 m lattice.
+    all_geo = filter_map_observations(
+        [
+            o
+            for o in observations
+            if o.latitude is not None and o.longitude is not None
+        ],
+        excluded_file_ids=EXCLUDED_OUTLIER_FILE_IDS,
+    )
     consolidated_clusters = cluster_by_radius(all_geo)
     plants_realigned = apply_lattice_to_clusters(
         consolidated_clusters, spacing_m=DEFAULT_PLANT_SPACING_M
@@ -225,9 +235,14 @@ def run_pipeline(
 
     # Map/export this run — cluster so each icon shows all photos within 4 m
     run_obs = [existing[fid] for fid in run_file_ids if fid in existing]
-    run_geo = [
-        o for o in run_obs if o.latitude is not None and o.longitude is not None
-    ]
+    run_geo = filter_map_observations(
+        [
+            o
+            for o in run_obs
+            if o.latitude is not None and o.longitude is not None
+        ],
+        excluded_file_ids=EXCLUDED_OUTLIER_FILE_IDS,
+    )
     run_clusters = cluster_by_radius(run_geo)
     # Display coords already set on shared observation objects via consolidated pass.
     mapped = [c.representative for c in run_clusters]
@@ -384,9 +399,17 @@ def rebuild_consolidated_exports(
     ensure_dirs()
     state = load_state()
     observations = [PlantObservation.from_dict(x) for x in state.get("observations", [])]
-    all_geo = [
-        o for o in observations if o.latitude is not None and o.longitude is not None
-    ]
+    for obs in observations:
+        if obs.file_id in EXCLUDED_OUTLIER_FILE_IDS:
+            obs.excluded_from_map = True
+    all_geo = filter_map_observations(
+        [
+            o
+            for o in observations
+            if o.latitude is not None and o.longitude is not None
+        ],
+        excluded_file_ids=EXCLUDED_OUTLIER_FILE_IDS,
+    )
     clusters = cluster_by_radius(all_geo)
     plants_realigned = apply_lattice_to_clusters(clusters, spacing_m=spacing_m)
     state["observations"] = [o.to_dict() for o in observations]

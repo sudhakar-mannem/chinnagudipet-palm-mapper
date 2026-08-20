@@ -207,6 +207,107 @@ HEALTH_COLORS = {
     "white": {"hex": "#f8fafc", "kml_aabbggrr": "fff8faf8", "label": "Unknown"},
 }
 
+# ---------------------------------------------------------------------------
+# Map View outliers (durable denylist)
+# ---------------------------------------------------------------------------
+# Resolved from Map View sequential labels (1-based over mapped clusters in
+# build_map / plant select) against bundled data/plant_state.json, then stored
+# as Drive file_ids so exclusions survive renumbering after removal.
+# Photos remain in plant_state with excluded_from_map=true and original GPS.
+#
+# Original map numbers at exclusion time:
+#   176, 189, 419, 421, 426, 455, 457, 521, 526, 597,
+#   1094, 1221, 1403, 1554, 1584, 1763, 1815
+EXCLUDED_OUTLIER_MAP_NUMBERS = (
+    176,
+    189,
+    419,
+    421,
+    426,
+    455,
+    457,
+    521,
+    526,
+    597,
+    1094,
+    1221,
+    1403,
+    1554,
+    1584,
+    1763,
+    1815,
+)
+
+# Representative file_ids for the 17 clusters (stable identity).
+EXCLUDED_OUTLIER_REP_FILE_IDS = frozenset(
+    {
+        "1CWXkMr4-zmObF64lrlnHUxuvwz2dAdgc",  # was #176
+        "1SU8jnTdii_OEwsdIQ212fcxfClUkvjSg",  # was #189
+        "1Cv-4JTVPizoVS1uxZkCv3BK4Fz7kHKKM",  # was #419
+        "13TxYQ2LEUh1H5esx9ZbpvzUp33TJqj49",  # was #421
+        "17msK1hbrE4NkB2tJu_wm_RdTzzNoby_2",  # was #426
+        "1mW1QnW4LncqxjUjxK_eP7ZFgfYLAmMam",  # was #455
+        "12wyIMKKL6BBg1yJcfaXHQEIvDS-q6WvQ",  # was #457
+        "1TbTuj6lg8X-CS35gjl7so0d6tyYguoq8",  # was #521
+        "1RmS82sjLGj-72oIZ5e13lUbNyOHQ6P9I",  # was #526
+        "1usSuihEW7kmxCw3T5RzaTPvnWwn-Pq3d",  # was #597
+        "1GIhEN8SkpTXJL0u23DekXWTVyWU34Wt6",  # was #1094
+        "1h6B9VLgXCe72I8KqufDSXk33TDFxRvtA",  # was #1221
+        "1ack2PMThELXfHMwdPfq-0JxVdjf7BFtz",  # was #1403
+        "1JScZuKol8Ul35UfHj6vm03HTkN7H7DEr",  # was #1554
+        "1NxK94UqB21Y3giNqchq1j7sfyx1QNkw-",  # was #1584
+        "1Da5hcL6x0m4MhEZp3CHUk_aRjTlTuuT2",  # was #1763 (plant_id OCR: 6JQJ+4C5)
+        "1_kD1-RNTRTK1PYX-mrOmzXEyJYZ1vhHn",  # was #1815 (plant_id OCR: address)
+    }
+)
+
+# All member photos of those clusters (prevents orphan photos reappearing).
+# Keep in sync with plant_state meta.outlier_exclusions.member_file_ids.
+EXCLUDED_OUTLIER_FILE_IDS = frozenset(
+    {
+        "12wyIMKKL6BBg1yJcfaXHQEIvDS-q6WvQ",
+        "13TxYQ2LEUh1H5esx9ZbpvzUp33TJqj49",
+        "14U2Kdruh-1fK6bE4tsFglJLbLXVt7ZNZ",
+        "16JC4B56I4gfsZ42LfxXO_QaBw66CdSux",
+        "16b-gtlR4tHPRJxKWOUpuIHr7Xa77keX-",
+        "17msK1hbrE4NkB2tJu_wm_RdTzzNoby_2",
+        "19PUKAx6PD9UkLHqVf01si5Okbk9KFFDk",
+        "1Btgxaim8AqdrckPteyjAV6y3DracAfzW",
+        "1CWXkMr4-zmObF64lrlnHUxuvwz2dAdgc",
+        "1Cv-4JTVPizoVS1uxZkCv3BK4Fz7kHKKM",
+        "1Da5hcL6x0m4MhEZp3CHUk_aRjTlTuuT2",
+        "1EPb-gpPYesQGKYYWXlRUc_10e5Hx0cuM",
+        "1FE0f5O3Gwn42Q91tllurTbT_nMeNp6fD",
+        "1GIhEN8SkpTXJL0u23DekXWTVyWU34Wt6",
+        "1JB0_9zZYaNddPiGjcz5iTjSCh_v5J5WK",
+        "1JScZuKol8Ul35UfHj6vm03HTkN7H7DEr",
+        "1JttqQL3xtvN2w59bA88PGvb1qnwystlK",
+        "1K0I8uvW2ysNSDbz-eKWwOn_GNG5jL3wW",
+        "1KQyCOuwPgJSkduu1zq9pjuAYN_von-NF",
+        "1NxK94UqB21Y3giNqchq1j7sfyx1QNkw-",
+        "1ORYms5w1FJsLWeY-3fjRD7dnjJ2XjWz2",
+        "1RmS82sjLGj-72oIZ5e13lUbNyOHQ6P9I",
+        "1SU8jnTdii_OEwsdIQ212fcxfClUkvjSg",
+        "1TbTuj6lg8X-CS35gjl7so0d6tyYguoq8",
+        "1YE-NzMicOcR9qXg6GR35mm4__1noq3xP",
+        "1_kD1-RNTRTK1PYX-mrOmzXEyJYZ1vhHn",
+        "1ack2PMThELXfHMwdPfq-0JxVdjf7BFtz",
+        "1bCYG8hDTt7i8K_2pG6Ywyh2JRRGcIt0p",
+        "1eRZPo-jEKmbHkY0LnZpZprtvndp4ZeNM",
+        "1fbiOBAduTJ2Ht0snbSQmd6Ds0VdDmi-S",
+        "1h4p6LktBYUS01nSG8Lx2WDW5u17QzRqY",
+        "1h6B9VLgXCe72I8KqufDSXk33TDFxRvtA",
+        "1lDVy9pAi8koLxw40iXkSHRdPlaoACwr_",
+        "1mW1QnW4LncqxjUjxK_eP7ZFgfYLAmMam",
+        "1nDMXLVYLOF42ubJgLGc3RK_621mxA5S4",
+        "1qhZTxFhMugr_xyTGs0n2kAnUUJ4uvSPB",
+        "1thNiRv_1tlkJPqt5O4NfXIqWTsrrWZaD",
+        "1usSuihEW7kmxCw3T5RzaTPvnWwn-Pq3d",
+        "1vjjyCGXlr_rLcudOprW0_rGCMsvU8hA3",
+        "1xD6TRogKDL3tRdKsLjXpItJIkh2FaNpV",
+    }
+)
+
 ICON_URLS = {
     "green": "http://maps.google.com/mapfiles/kml/paddle/grn-circle.png",
     "amber": "http://maps.google.com/mapfiles/kml/paddle/ylw-circle.png",

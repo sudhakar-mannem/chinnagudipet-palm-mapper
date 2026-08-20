@@ -124,3 +124,4 @@ palm_mapper/
 - Analysis is cached per Drive file version; only new or changed photos are re-scored unless you enable **Re-analyze**.
 - Prefer **KMZ** over KML in Google Earth so photos display offline without making Drive files public.
 - If a photo has no readable GPS stamp and no EXIF GPS, it is skipped on the map (counted under “No GPS”).
+- **Map outliers:** `config.EXCLUDED_OUTLIER_MAP_NUMBERS` / `EXCLUDED_OUTLIER_FILE_IDS` hide selected plants from Map View and consolidated KML while keeping photos + original GPS in `data/plant_state.json` (`excluded_from_map` + `meta.outlier_exclusions`). Remaining plants are renumbered 1..N.
