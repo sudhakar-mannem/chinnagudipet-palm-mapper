@@ -738,33 +738,126 @@ def page_map_view() -> None:
                 )
 
 
+def _plantation_median_lat_lon(mapped: List[PlantCluster]) -> Optional[Tuple[float, float]]:
+    lats = []
+    lons = []
+    for c in mapped:
+        p = c.representative
+        if p.map_latitude is None or p.map_longitude is None:
+            continue
+        lats.append(float(p.map_latitude))
+        lons.append(float(p.map_longitude))
+    if not lats:
+        return None
+    lats.sort()
+    lons.sort()
+    mid = len(lats) // 2
+    return lats[mid], lons[mid]
+
+
 def _read_device_gps():
     """
-    Browser geolocation via streamlit-geolocation (navigator.geolocation).
-    Returns (lat, lon, accuracy_m) or (None, None, None).
-    Requires HTTPS (Streamlit Cloud) or localhost; user must tap the location button.
-    """
-    try:
-        from streamlit_geolocation import streamlit_geolocation
-    except ImportError:
-        st.warning(
-            "Install **streamlit-geolocation** (`pip install streamlit-geolocation`) "
-            "to read GPS on this device."
-        )
-        return None, None, None
+    High-accuracy browser GPS for mobile Near me.
 
-    st.caption("Tap the location button, allow GPS when prompted, then wait a moment.")
-    location = streamlit_geolocation()
-    if not location or location == "No Location Info":
-        return None, None, None
-    if not isinstance(location, dict):
-        return None, None, None
-    lat = location.get("latitude")
-    lon = location.get("longitude")
-    if lat is None or lon is None:
+    streamlit-geolocation does not request enableHighAccuracy, so phones often
+    return coarse network location (±100–500 m) which cannot match 2 m plant
+    spacing. We use navigator.geolocation with enableHighAccuracy and write
+    the fix into URL query params (works on Streamlit Cloud HTTPS).
+    """
+    import streamlit.components.v1 as components
+
+    params = st.query_params
+    lat_q = params.get("gps_lat")
+    lon_q = params.get("gps_lon")
+    acc_q = params.get("gps_acc")
+
+    st.caption(
+        "Stand outdoors next to the plant → tap **Get precise GPS** → allow location "
+        "→ wait until accuracy is about **±10 m** (not hundreds of meters)."
+    )
+    if st.button("Get precise GPS", type="primary", use_container_width=True, key="near_me_gps_btn"):
+        st.session_state["near_me_gps_armed"] = True
+
+    if st.session_state.get("near_me_gps_armed"):
+        components.html(
+            """
+            <div id="gps-status" style="font-family:sans-serif;font-size:14px;padding:8px 0;">
+              Requesting high-accuracy GPS… keep the phone outdoors.
+            </div>
+            <script>
+            (function () {
+              const status = document.getElementById("gps-status");
+              function fail(msg) {
+                if (status) status.textContent = msg;
+              }
+              if (!navigator.geolocation) {
+                fail("This browser has no geolocation.");
+                return;
+              }
+              const opts = {
+                enableHighAccuracy: true,
+                maximumAge: 0,
+                timeout: 60000
+              };
+              let best = null;
+              const watchId = navigator.geolocation.watchPosition(
+                function (pos) {
+                  const c = pos.coords;
+                  const fix = {
+                    latitude: c.latitude,
+                    longitude: c.longitude,
+                    accuracy: c.accuracy
+                  };
+                  if (!best || fix.accuracy < best.accuracy) {
+                    best = fix;
+                  }
+                  if (status) {
+                    status.textContent =
+                      "GPS ±" + Math.round(fix.accuracy) + " m — " +
+                      (fix.accuracy <= 15
+                        ? "good lock, applying…"
+                        : "waiting for a better lock…");
+                  }
+                  // Accept when accurate enough, or after we have any improving fix under 40 m
+                  if (fix.accuracy <= 15 || (best && best.accuracy <= 40 && fix.accuracy === best.accuracy)) {
+                    navigator.geolocation.clearWatch(watchId);
+                    const u = new URL(window.parent.location.href);
+                    u.searchParams.set("gps_lat", String(best.latitude));
+                    u.searchParams.set("gps_lon", String(best.longitude));
+                    u.searchParams.set("gps_acc", String(best.accuracy));
+                    window.parent.location.href = u.toString();
+                  }
+                },
+                function (err) {
+                  fail("GPS error: " + (err && err.message ? err.message : String(err)));
+                },
+                opts
+              );
+              // Safety: after 25s take the best fix we have
+              setTimeout(function () {
+                if (!best) return;
+                try { navigator.geolocation.clearWatch(watchId); } catch (e) {}
+                const u = new URL(window.parent.location.href);
+                u.searchParams.set("gps_lat", String(best.latitude));
+                u.searchParams.set("gps_lon", String(best.longitude));
+                u.searchParams.set("gps_acc", String(best.accuracy));
+                window.parent.location.href = u.toString();
+              }, 25000);
+            })();
+            </script>
+            """,
+            height=70,
+        )
+
+    if lat_q is None or lon_q is None:
         return None, None, None
     try:
-        return float(lat), float(lon), location.get("accuracy")
+        lat = float(lat_q if not isinstance(lat_q, list) else lat_q[0])
+        lon = float(lon_q if not isinstance(lon_q, list) else lon_q[0])
+        acc = None
+        if acc_q is not None:
+            acc = float(acc_q if not isinstance(acc_q, list) else acc_q[0])
+        return lat, lon, acc
     except (TypeError, ValueError):
         return None, None, None
 
@@ -773,7 +866,7 @@ def page_near_me() -> None:
     """Mobile-first: GPS → nearest map plant number within NEAR_PLANT_RADIUS_M."""
     st.title("Near me")
     st.caption(
-        "Stand next to a plant and use your phone GPS. "
+        "Stand next to a plant and use precise phone GPS. "
         "Matches Map View plant numbers (map positions after ~9 m realignment)."
     )
 
@@ -784,35 +877,69 @@ def page_near_me() -> None:
         )
         return
 
-    col_gps, col_refresh = st.columns([2, 1])
-    with col_gps:
-        lat, lon, accuracy = _read_device_gps()
-    with col_refresh:
-        st.write("")  # align with component button
-        if st.button("Refresh", use_container_width=True, key="near_me_refresh"):
-            st.rerun()
+    lat, lon, accuracy = _read_device_gps()
+    if st.button("Clear GPS / try again", use_container_width=True, key="near_me_clear"):
+        st.session_state.pop("near_me_gps_armed", None)
+        st.session_state.pop("near_me_lat", None)
+        st.session_state.pop("near_me_lon", None)
+        st.session_state.pop("near_me_acc", None)
+        try:
+            st.query_params.clear()
+        except Exception:
+            for key in ("gps_lat", "gps_lon", "gps_acc"):
+                try:
+                    del st.query_params[key]
+                except Exception:
+                    pass
+        st.rerun()
 
-    # Keep last good fix so a component remount does not blank the UI
     if lat is not None and lon is not None:
         st.session_state["near_me_lat"] = lat
         st.session_state["near_me_lon"] = lon
         st.session_state["near_me_acc"] = accuracy
+        st.session_state["near_me_gps_armed"] = False
     else:
         lat = st.session_state.get("near_me_lat")
         lon = st.session_state.get("near_me_lon")
         accuracy = st.session_state.get("near_me_acc")
 
     if lat is None or lon is None:
-        st.info("Waiting for location… Allow location access, then tap the location button again if needed.")
+        st.info("Waiting for a precise GPS fix…")
         return
 
-    acc_txt = ""
-    if accuracy is not None:
-        try:
-            acc_txt = " · GPS ±%.0f m" % float(accuracy)
-        except (TypeError, ValueError):
-            acc_txt = ""
+    acc_m = None
+    try:
+        if accuracy is not None:
+            acc_m = float(accuracy)
+    except (TypeError, ValueError):
+        acc_m = None
+
+    acc_txt = (" · GPS ±%.0f m" % acc_m) if acc_m is not None else ""
     st.caption("Your location: %.6f, %.6f%s" % (lat, lon, acc_txt))
+
+    farm = _plantation_median_lat_lon(mapped)
+    if farm is not None:
+        farm_dist = haversine_m(float(lat), float(lon), farm[0], farm[1])
+        if farm_dist > 500:
+            st.error(
+                "This GPS fix is about **%.0f m** from the plantation center — "
+                "the phone is not locked on the farm (often Wi‑Fi/cell location). "
+                "Go outdoors beside the plant, tap **Get precise GPS**, and wait for "
+                "**±10 m** or better." % farm_dist
+            )
+            return
+
+    if acc_m is not None and acc_m > 40:
+        st.warning(
+            "GPS accuracy is still ±%.0f m. Plant matching needs roughly ±10–20 m. "
+            "Tap **Get precise GPS** again outdoors and wait for a better lock."
+            % acc_m
+        )
+
+    # Effective match radius: at least 2 m, but widen slightly to GPS uncertainty (capped)
+    match_r = float(NEAR_PLANT_RADIUS_M)
+    if acc_m is not None and acc_m > match_r:
+        match_r = min(max(acc_m, NEAR_PLANT_RADIUS_M), 25.0)
 
     hit = nearest_mapped_plant(mapped, float(lat), float(lon))
     if hit is None:
@@ -826,7 +953,7 @@ def page_near_me() -> None:
     label = HEALTH_COLORS[health]["label"]
     title = p.plant_id or Path(p.file_name).stem
 
-    if dist_m <= NEAR_PLANT_RADIUS_M:
+    if dist_m <= match_r:
         st.markdown(
             '<div style="text-align:center;padding:1.2rem 0 0.4rem 0;">'
             '<div style="font-size:0.95rem;opacity:0.75;margin-bottom:0.35rem;">Plant</div>'
@@ -839,6 +966,11 @@ def page_near_me() -> None:
             % (color, plant_n, dist_m, html.escape(label), html.escape(title)),
             unsafe_allow_html=True,
         )
+        if match_r > NEAR_PLANT_RADIUS_M:
+            st.caption(
+                "Matched within GPS uncertainty (±%.0f m). Confirm the plant visually."
+                % (acc_m or match_r)
+            )
         st.session_state["selected_cluster_idx"] = max(0, plant_n - 1)
         st.session_state["plant_select_main"] = max(0, plant_n - 1)
         st.caption("Open **Map view** in the menu to see photos for this plant number.")
@@ -848,7 +980,7 @@ def page_near_me() -> None:
             '<div style="font-size:clamp(1.6rem,7vw,2.4rem);font-weight:700;line-height:1.2;">'
             "No plant within %.0f m</div>"
             "</div>"
-            % NEAR_PLANT_RADIUS_M,
+            % match_r,
             unsafe_allow_html=True,
         )
         st.markdown(
@@ -858,6 +990,7 @@ def page_near_me() -> None:
             % (plant_n, dist_m, html.escape(label)),
             unsafe_allow_html=True,
         )
+
 
 
 def page_plant_mapping() -> None:
