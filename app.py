@@ -280,36 +280,7 @@ def render_photo_panel(cluster: PlantCluster) -> None:
     )
     panel = st.container()
     with panel:
-        st.write(
-            "**%s** — %s · **%d** photo(s) within %.0f m"
-            % (
-                selected.plant_id or Path(selected.file_name).stem,
-                HEALTH_COLORS.get(selected.health, HEALTH_COLORS["white"])["label"],
-                cluster.photo_count,
-                cluster.radius_m,
-            )
-        )
-        if selected.source_folder_path:
-            st.caption(selected.source_folder_path)
-        if selected.summary:
-            st.caption(selected.summary)
-        if selected.altitude is not None:
-            st.caption("Altitude: %.1f m" % selected.altitude)
-        if selected.latitude is not None and selected.longitude is not None:
-            st.caption(
-                "Original GPS: %.6f, %.6f"
-                % (float(selected.latitude), float(selected.longitude))
-            )
-        if selected.display_latitude is not None and selected.display_longitude is not None:
-            st.caption(
-                "Map position (%.0f m spacing): %.6f, %.6f"
-                % (
-                    DEFAULT_PLANT_SPACING_M,
-                    float(selected.display_latitude),
-                    float(selected.display_longitude),
-                )
-            )
-
+        # Image first, then supporting text below (keeps map click / plant select unchanged).
         max_show = int(st.session_state.get("photo_page_size") or 1)
         members = cluster.members
         total = len(members)
@@ -318,16 +289,6 @@ def render_photo_panel(cluster: PlantCluster) -> None:
         shown = 0
         for idx, photo in enumerate(members[:show_n]):
             file_key = photo.file_id or ("%s_%d" % (plant_key, idx))
-            st.markdown(
-                "**%s%d / %d** — `%s` · alt %s"
-                % (
-                    "LATEST · " if idx == 0 else "",
-                    idx + 1,
-                    total,
-                    photo.file_name,
-                    ("%.1f m" % photo.altitude) if photo.altitude is not None else "n/a",
-                )
-            )
 
             # Prefer local cache; otherwise download this one photo from Drive
             local = ensure_local_photo(
@@ -362,6 +323,16 @@ def render_photo_panel(cluster: PlantCluster) -> None:
                     shown += 1
                 else:
                     st.warning("Could not decode image preview")
+                st.markdown(
+                    "**%s%d / %d** — `%s` · alt %s"
+                    % (
+                        "LATEST · " if idx == 0 else "",
+                        idx + 1,
+                        total,
+                        photo.file_name,
+                        ("%.1f m" % photo.altitude) if photo.altitude is not None else "n/a",
+                    )
+                )
                 with st.expander("Larger preview", expanded=False):
                     show_fast_image(local, caption="", max_side=900)
             else:
@@ -386,6 +357,36 @@ def render_photo_panel(cluster: PlantCluster) -> None:
 
         if shown == 0 and total:
             st.caption("If photos stay missing, reconnect Google Drive in the sidebar.")
+
+        st.write(
+            "**%s** — %s · **%d** photo(s) within %.0f m"
+            % (
+                selected.plant_id or Path(selected.file_name).stem,
+                HEALTH_COLORS.get(selected.health, HEALTH_COLORS["white"])["label"],
+                cluster.photo_count,
+                cluster.radius_m,
+            )
+        )
+        if selected.source_folder_path:
+            st.caption(selected.source_folder_path)
+        if selected.summary:
+            st.caption(selected.summary)
+        if selected.altitude is not None:
+            st.caption("Altitude: %.1f m" % selected.altitude)
+        if selected.latitude is not None and selected.longitude is not None:
+            st.caption(
+                "Original GPS: %.6f, %.6f"
+                % (float(selected.latitude), float(selected.longitude))
+            )
+        if selected.display_latitude is not None and selected.display_longitude is not None:
+            st.caption(
+                "Map position (%.0f m spacing): %.6f, %.6f"
+                % (
+                    DEFAULT_PLANT_SPACING_M,
+                    float(selected.display_latitude),
+                    float(selected.display_longitude),
+                )
+            )
 
 
 
