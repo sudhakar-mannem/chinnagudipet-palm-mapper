@@ -867,7 +867,8 @@ def page_near_me() -> None:
     st.title("Near me")
     st.caption(
         "Stand next to a plant and use precise phone GPS. "
-        "Matches Map View plant numbers (map positions after ~9 m realignment)."
+        "Matches Map View plant numbers (map positions after ~9 m realignment). "
+        "(GPS v2 — high accuracy)"
     )
 
     mapped = mapped_clusters_for_map(load_all_clusters())
