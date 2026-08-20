@@ -599,7 +599,6 @@ def page_map_view() -> None:
             )
 
     with right:
-        st.subheader("Photos within %.0f m" % DEFAULT_PHOTO_RADIUS_M)
         if not clusters:
             st.write("No plants yet.")
             return
