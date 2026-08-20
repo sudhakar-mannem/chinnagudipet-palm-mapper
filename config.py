@@ -201,10 +201,10 @@ DRIVE_SCOPES = [
 ]
 
 HEALTH_COLORS = {
-    "green": {"hex": "#22c55e", "kml_aabbggrr": "ff2ec522", "label": "Healthy"},
-    "amber": {"hex": "#f59e0b", "kml_aabbggrr": "ff0b9ef5", "label": "Needs attention"},
-    "red": {"hex": "#ef4444", "kml_aabbggrr": "ff4444ef", "label": "Critical / diseased"},
-    "white": {"hex": "#f8fafc", "kml_aabbggrr": "fff8faf8", "label": "Unknown"},
+    "green": {"hex": "#22c55e", "kml_aabbggrr": "ff2ec522", "label": "ఆరోగ్యంగా ఉంది"},
+    "amber": {"hex": "#f59e0b", "kml_aabbggrr": "ff0b9ef5", "label": "దృష్టి అవసరం"},
+    "red": {"hex": "#ef4444", "kml_aabbggrr": "ff4444ef", "label": "తీవ్రం / వ్యాధి"},
+    "white": {"hex": "#f8fafc", "kml_aabbggrr": "fff8faf8", "label": "తెలియదు"},
 }
 
 # ---------------------------------------------------------------------------

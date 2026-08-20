@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import html
 import io
+import json
 import os
 import sys
 from pathlib import Path
@@ -48,10 +49,10 @@ from services.models import (  # noqa: E402
     filter_map_observations,
     haversine_m,
 )
-from services.pipeline import load_state, run_pipeline  # noqa: E402
+from services.ui_te import t  # noqa: E402
 
 st.set_page_config(
-    page_title="Palm Plant Health Mapper",
+    page_title=t("app_title"),
     page_icon="🌴",
     layout="wide",
 )
@@ -256,8 +257,14 @@ def build_map(clusters: List[PlantCluster]):
         if p.latitude is not None and p.longitude is not None:
             gps_note = "<br/>GPS: %.6f, %.6f" % (float(p.latitude), float(p.longitude))
         popup = folium.Popup(
-            "<b>#%d</b> %s<br/>%s<br/>%d photo(s) — see panel →%s"
-            % (n, html.escape(title), label, c.photo_count, gps_note),
+            "<b>#%d</b> %s<br/>%s<br/>%s%s"
+            % (
+                n,
+                html.escape(title),
+                label,
+                t("popup_photos", c.photo_count),
+                gps_note,
+            ),
             max_width=260,
         )
         icon_html = (
@@ -270,7 +277,7 @@ def build_map(clusters: List[PlantCluster]):
         folium.Marker(
             location=[p.map_latitude, p.map_longitude],
             popup=popup,
-            tooltip="#%d · %s · %d photos" % (n, title, c.photo_count),
+            tooltip="#%d · %s" % (n, t("tooltip_photos", title, c.photo_count)),
             icon=DivIcon(
                 html=icon_html,
                 icon_size=(22, 22),
@@ -383,7 +390,7 @@ def render_photo_panel(cluster: PlantCluster) -> None:
             )
             if local is None or not local.exists():
                 try:
-                    with st.spinner("Loading photo from Drive…"):
+                    with st.spinner(t("loading_photo")):
                         local = ensure_local_photo(
                             photo.file_id or "",
                             photo.file_name or "",
@@ -391,12 +398,9 @@ def render_photo_panel(cluster: PlantCluster) -> None:
                             download=True,
                         )
                 except DriveAuthRequired:
-                    st.warning(
-                        "Drive Secrets token missing/invalid — photos cannot download. "
-                        "Set `GOOGLE_TOKEN_B64` in Cloud Secrets, then click **Connect from Secrets**."
-                    )
+                    st.warning(t("drive_secrets_invalid"))
                     if photo.photo_url:
-                        st.markdown("[Open in Google Drive](%s)" % photo.photo_url)
+                        st.markdown("[%s](%s)" % (t("open_drive"), photo.photo_url))
                     continue
 
             if local and local.exists():
@@ -406,45 +410,50 @@ def render_photo_panel(cluster: PlantCluster) -> None:
                 if ok:
                     shown += 1
                 else:
-                    st.warning("Could not decode image preview")
+                    st.warning(t("could_not_decode"))
+                alt_txt = (
+                    t("altitude_m", photo.altitude)
+                    if photo.altitude is not None
+                    else t("n_a")
+                )
                 st.markdown(
-                    "**%s%d / %d** — `%s` · alt %s"
-                    % (
-                        "LATEST · " if idx == 0 else "",
+                    t(
+                        "photo_meta",
+                        t("latest") if idx == 0 else "",
                         idx + 1,
                         total,
                         photo.file_name,
-                        ("%.1f m" % photo.altitude) if photo.altitude is not None else "n/a",
+                        alt_txt,
                     )
                 )
-                with st.expander("Larger preview", expanded=False):
+                with st.expander(t("larger_preview"), expanded=False):
                     show_fast_image(local, caption="", max_side=900)
             else:
-                st.error("Could not download this photo from Drive.")
+                st.error(t("could_not_download"))
                 if photo.photo_url:
-                    st.markdown("[Open in Google Drive](%s)" % photo.photo_url)
+                    st.markdown("[%s](%s)" % (t("open_drive"), photo.photo_url))
                 # Keep a manual retry with a unique key per file
-                if st.button("Retry download", key="retry_photo_%s" % file_key):
+                if st.button(t("retry_download"), key="retry_photo_%s" % file_key):
                     st.rerun()
 
         if total > show_n:
             if st.button(
-                "Show more photos (%d remaining)" % (total - show_n),
+                t("show_more_photos", total - show_n),
                 key="more_photos_%s" % plant_key,
             ):
                 st.session_state["photo_page_size"] = show_n + 1
                 st.rerun()
         elif total > 1 and max_show > 1:
-            if st.button("Show fewer photos", key="fewer_photos_%s" % plant_key):
+            if st.button(t("show_fewer_photos"), key="fewer_photos_%s" % plant_key):
                 st.session_state["photo_page_size"] = 1
                 st.rerun()
 
         if shown == 0 and total:
-            st.caption("If photos stay missing, reconnect Google Drive in the sidebar.")
+            st.caption(t("photos_missing_tip"))
 
         st.write(
-            "**%s** — %s · **%d** photo(s) within %.0f m"
-            % (
+            t(
+                "plant_n_photos",
                 selected.plant_id or Path(selected.file_name).stem,
                 HEALTH_COLORS.get(selected.health, HEALTH_COLORS["white"])["label"],
                 cluster.photo_count,
@@ -456,16 +465,19 @@ def render_photo_panel(cluster: PlantCluster) -> None:
         if selected.summary:
             st.caption(selected.summary)
         if selected.altitude is not None:
-            st.caption("Altitude: %.1f m" % selected.altitude)
+            st.caption(t("altitude", selected.altitude))
         if selected.latitude is not None and selected.longitude is not None:
             st.caption(
-                "Original GPS: %.6f, %.6f"
-                % (float(selected.latitude), float(selected.longitude))
+                t(
+                    "original_gps",
+                    float(selected.latitude),
+                    float(selected.longitude),
+                )
             )
         if selected.display_latitude is not None and selected.display_longitude is not None:
             st.caption(
-                "Map position (%.0f m spacing): %.6f, %.6f"
-                % (
+                t(
+                    "map_position",
                     DEFAULT_PLANT_SPACING_M,
                     float(selected.display_latitude),
                     float(selected.display_longitude),
@@ -514,40 +526,28 @@ def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
             if TOKEN_FILE.exists():
                 TOKEN_FILE.unlink()
         except Exception as exc:
-            st.error("Could not clear local token: %s" % exc)
+            st.error(t("could_not_clear_token", exc))
             return
         # Secrets will rewrite token.json on next reload — warn on Cloud
         secret_status = reload_env() or {}
         if secret_status.get("token_written") and TOKEN_FILE.exists():
-            st.warning(
-                "Session disconnected, but `GOOGLE_TOKEN_B64` is still in Secrets "
-                "(Drive will reconnect on reload). Remove that secret to stay logged out."
-            )
+            st.warning(t("secrets_still_provide"))
         else:
-            st.success("Disconnected from Google Drive.")
+            st.success(t("disconnected"))
         st.rerun()
 
     if not connect_clicked:
         return
 
-    with st.spinner("Loading Google Drive credentials from Secrets…"):
+    with st.spinner(t("loading_drive_creds")):
         secret_status = reload_env() or {}
 
     if not secret_status.get("credentials_written") and not CREDENTIALS_FILE.exists():
-        st.error(
-            "Missing `GOOGLE_CREDENTIALS_B64` in Secrets. "
-            "On your PC run `python make_cloud_secrets.py`, then paste into the "
-            "**Streamlit Cloud dashboard** (**Manage app → Settings → Secrets**, not inside this app)."
-        )
+        st.error(t("missing_creds_b64_long"))
         return
     if not secret_status.get("token_written") and not TOKEN_FILE.exists():
-        st.error(
-            "Missing `GOOGLE_TOKEN_B64` in Secrets. "
-            "On your PC run `python auth_drive.py` once, then `python make_cloud_secrets.py`, "
-            "and paste both B64 lines into the **Streamlit Cloud dashboard** "
-            "(**Manage app → Settings → Secrets**, not inside this app)."
-        )
-        with st.expander("Secrets status", expanded=True):
+        st.error(t("missing_token_b64"))
+        with st.expander(t("secrets_status"), expanded=True):
             st.write(secret_status)
         return
 
@@ -556,12 +556,9 @@ def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
     try:
         get_credentials(interactive=False)
     except DriveAuthRequired as exc:
-        st.error(
-            "Secrets token could not authenticate Drive (expired or revoked). "
-            "Refresh the token on your PC and update Cloud Secrets — the app never uses a browser."
-        )
+        st.error(t("secrets_token_auth_failed"))
         st.caption(str(exc).replace("\n", " "))
-        with st.expander("Secrets status", expanded=True):
+        with st.expander(t("secrets_status"), expanded=True):
             st.write(
                 {
                     "secrets_available": secret_status.get("secrets_available"),
@@ -575,13 +572,13 @@ def handle_google_auth(connect_clicked: bool, disconnect_clicked: bool) -> None:
             )
         return
     except Exception as exc:
-        st.error("Drive auth from Secrets failed: %s" % exc)
+        st.error(t("drive_auth_failed", exc))
         return
 
     cached_subfolders.clear()
     st.session_state["folders_loaded"] = True
     st.session_state["drive_ready"] = True
-    st.success("Google Drive connected via Secrets (no browser).")
+    st.success(t("connected_secrets_ok"))
     st.rerun()
 
 
@@ -597,33 +594,17 @@ def ensure_drive_from_secrets() -> bool:
 
 
 def page_map_view() -> None:
-    st.title("Farm map")
-    st.caption("Click a plant marker to preview photos. Use **Plant Mapping** in the sidebar to sync new Drive folders.")
+    st.title(t("farm_map"))
+    st.caption(t("farm_map_caption"))
 
     if not ensure_drive_from_secrets():
-        st.error(
-            "Photos need a valid Drive token in **Streamlit Cloud Secrets** "
-            "(this is **not** a menu inside the Palm Mapper app)."
-        )
-        with st.expander("How to open Secrets (Streamlit Cloud)", expanded=True):
-            st.markdown(
-                """
-1. Open [https://share.streamlit.io](https://share.streamlit.io) and sign in  
-2. Find **chinnagudipet-palm-mapper** in your workspace  
-3. Click the **⋮** menu on the app → **Settings**  
-   (or open the live app → bottom-right **Manage app** → **Settings**)  
-4. Open the **Secrets** tab  
-5. Paste both lines from your PC file  
-   `palm_mapper/.streamlit/secrets_cloud_snippet.toml`  
-   (`GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64`)  
-6. Click **Save**, then **Reboot app**  
-7. Back in Palm Mapper → **Plant Mapping** → **Connect from Secrets**
-"""
-            )
+        st.error(t("map_photos_need_secrets"))
+        with st.expander(t("how_open_secrets"), expanded=True):
+            st.markdown(t("how_open_secrets_steps"))
 
     clusters = load_all_clusters()
     health_filter = st.multiselect(
-        "Filter by health",
+        t("filter_health"),
         options=["green", "amber", "red", "white"],
         default=["green", "amber", "red", "white"],
         key="map_health_filter",
@@ -637,11 +618,11 @@ def page_map_view() -> None:
         counts[h] += 1
 
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Plants on map", len(clusters))
-    m2.metric("Green", counts["green"])
-    m3.metric("Amber", counts["amber"])
-    m4.metric("Red", counts["red"])
-    m5.metric("White", counts["white"])
+    m1.metric(t("plants_on_map"), len(clusters))
+    m2.metric(HEALTH_COLORS["green"]["label"], counts["green"])
+    m3.metric(HEALTH_COLORS["amber"]["label"], counts["amber"])
+    m4.metric(HEALTH_COLORS["red"]["label"], counts["red"])
+    m5.metric(HEALTH_COLORS["white"]["label"], counts["white"])
 
     left, right = st.columns([1.55, 1])
     with left:
@@ -674,24 +655,22 @@ def page_map_view() -> None:
                         st.session_state["photo_page_size"] = 1
                         st.rerun()
         else:
-            st.info(
-                "No mapped plants yet. Open **Plant Mapping** in the sidebar to connect Drive and run analysis."
-            )
+            st.info(t("no_mapped_plants"))
 
     with right:
         if not clusters:
-            st.write("No plants yet.")
+            st.write(t("no_plants_yet"))
             return
 
         labels = []
         for i, c in enumerate(clusters):
             p = c.representative
             labels.append(
-                "#%d | %s | %s | %d photo(s)"
-                % (
+                t(
+                    "plant_option",
                     i + 1,
                     p.plant_id or Path(p.file_name).stem,
-                    p.health,
+                    HEALTH_COLORS.get(p.health, HEALTH_COLORS["white"])["label"],
                     c.photo_count,
                 )
             )
@@ -706,7 +685,7 @@ def page_map_view() -> None:
 
         prev_choice = int(st.session_state.get("selected_cluster_idx") or 0)
         choice = st.selectbox(
-            "Select plant",
+            t("select_plant"),
             options=list(range(len(clusters))),
             format_func=lambda i: labels[i],
             key="plant_select_main",
@@ -716,7 +695,7 @@ def page_map_view() -> None:
         st.session_state["selected_cluster_idx"] = choice
         render_photo_panel(clusters[choice])
 
-    with st.expander("Open / download Google Earth files", expanded=False):
+    with st.expander(t("open_earth"), expanded=False):
         consolidated_kml = OUTPUT_DIR / "palm_health_consolidated.kml"
         consolidated_kmz = OUTPUT_DIR / "palm_health_consolidated.kmz"
         earth_folder = OUTPUT_DIR / "palm_health_consolidated_earth_folder"
@@ -726,12 +705,14 @@ def page_map_view() -> None:
         target = earth_open if earth_open.exists() else consolidated_kmz
         c1, c2 = st.columns(2)
         with c1:
-            if target.exists() and st.button("Open consolidated in Google Earth", type="primary"):
+            if target.exists() and st.button(
+                t("open_consolidated_earth"), type="primary"
+            ):
                 st.success(open_in_google_earth(target))
         with c2:
             if consolidated_kml.exists():
                 st.download_button(
-                    "Download consolidated KML",
+                    t("download_kml"),
                     data=consolidated_kml.read_bytes(),
                     file_name="palm_health_consolidated.kml",
                     mime="application/vnd.google-earth.kml+xml",
@@ -771,27 +752,29 @@ def _read_device_gps():
     lon_q = params.get("gps_lon")
     acc_q = params.get("gps_acc")
 
-    st.caption(
-        "Stand outdoors next to the plant → tap **Get precise GPS** → allow location "
-        "→ wait until accuracy is about **±10 m** (not hundreds of meters)."
-    )
-    if st.button("Get precise GPS", type="primary", use_container_width=True, key="near_me_gps_btn"):
+    st.caption(t("gps_howto"))
+    if st.button(
+        t("get_precise_gps"), type="primary", use_container_width=True, key="near_me_gps_btn"
+    ):
         st.session_state["near_me_gps_armed"] = True
 
     if st.session_state.get("near_me_gps_armed"):
         components.html(
             """
             <div id="gps-status" style="font-family:sans-serif;font-size:14px;padding:8px 0;">
-              Requesting high-accuracy GPS… keep the phone outdoors.
+              %s
             </div>
             <script>
             (function () {
               const status = document.getElementById("gps-status");
+              const msgGood = %s;
+              const msgWait = %s;
+              const errPrefix = %s;
               function fail(msg) {
                 if (status) status.textContent = msg;
               }
               if (!navigator.geolocation) {
-                fail("This browser has no geolocation.");
+                fail(%s);
                 return;
               }
               const opts = {
@@ -814,9 +797,7 @@ def _read_device_gps():
                   if (status) {
                     status.textContent =
                       "GPS ±" + Math.round(fix.accuracy) + " m — " +
-                      (fix.accuracy <= 15
-                        ? "good lock, applying…"
-                        : "waiting for a better lock…");
+                      (fix.accuracy <= 15 ? msgGood : msgWait);
                   }
                   // Accept when accurate enough, or after we have any improving fix under 40 m
                   if (fix.accuracy <= 15 || (best && best.accuracy <= 40 && fix.accuracy === best.accuracy)) {
@@ -829,7 +810,7 @@ def _read_device_gps():
                   }
                 },
                 function (err) {
-                  fail("GPS error: " + (err && err.message ? err.message : String(err)));
+                  fail(errPrefix + (err && err.message ? err.message : String(err)));
                 },
                 opts
               );
@@ -845,7 +826,14 @@ def _read_device_gps():
               }, 25000);
             })();
             </script>
-            """,
+            """
+            % (
+                html.escape(t("gps_requesting_html")),
+                json.dumps(t("gps_lock_good"), ensure_ascii=False),
+                json.dumps(t("gps_lock_wait"), ensure_ascii=False),
+                json.dumps(t("gps_error_prefix"), ensure_ascii=False),
+                json.dumps(t("gps_no_geolocation"), ensure_ascii=False),
+            ),
             height=70,
         )
 
@@ -864,22 +852,16 @@ def _read_device_gps():
 
 def page_near_me() -> None:
     """Mobile-first: GPS → nearest map plant number within NEAR_PLANT_RADIUS_M."""
-    st.title("Near me")
-    st.caption(
-        "Stand next to a plant and use precise phone GPS. "
-        "Matches Map View plant numbers (map positions after ~9 m realignment). "
-        "(GPS v2 — high accuracy)"
-    )
+    st.title(t("near_me_title"))
+    st.caption(t("near_me_caption"))
 
     mapped = mapped_clusters_for_map(load_all_clusters())
     if not mapped:
-        st.info(
-            "No mapped plants yet. Open **Plant Mapping** to sync, or **Map view** to confirm data."
-        )
+        st.info(t("near_me_no_plants"))
         return
 
     lat, lon, accuracy = _read_device_gps()
-    if st.button("Clear GPS / try again", use_container_width=True, key="near_me_clear"):
+    if st.button(t("clear_gps"), use_container_width=True, key="near_me_clear"):
         st.session_state.pop("near_me_gps_armed", None)
         st.session_state.pop("near_me_lat", None)
         st.session_state.pop("near_me_lon", None)
@@ -905,7 +887,7 @@ def page_near_me() -> None:
         accuracy = st.session_state.get("near_me_acc")
 
     if lat is None or lon is None:
-        st.info("Waiting for a precise GPS fix…")
+        st.info(t("waiting_gps"))
         return
 
     acc_m = None
@@ -915,27 +897,18 @@ def page_near_me() -> None:
     except (TypeError, ValueError):
         acc_m = None
 
-    acc_txt = (" · GPS ±%.0f m" % acc_m) if acc_m is not None else ""
-    st.caption("Your location: %.6f, %.6f%s" % (lat, lon, acc_txt))
+    acc_txt = t("acc_suffix", acc_m) if acc_m is not None else ""
+    st.caption(t("your_location", lat, lon, acc_txt))
 
     farm = _plantation_median_lat_lon(mapped)
     if farm is not None:
         farm_dist = haversine_m(float(lat), float(lon), farm[0], farm[1])
         if farm_dist > 500:
-            st.error(
-                "This GPS fix is about **%.0f m** from the plantation center — "
-                "the phone is not locked on the farm (often Wi‑Fi/cell location). "
-                "Go outdoors beside the plant, tap **Get precise GPS**, and wait for "
-                "**±10 m** or better." % farm_dist
-            )
+            st.error(t("gps_far_from_farm", farm_dist))
             return
 
     if acc_m is not None and acc_m > 40:
-        st.warning(
-            "GPS accuracy is still ±%.0f m. Plant matching needs roughly ±10–20 m. "
-            "Tap **Get precise GPS** again outdoors and wait for a better lock."
-            % acc_m
-        )
+        st.warning(t("gps_accuracy_poor", acc_m))
 
     # Effective match radius: at least 2 m, but widen slightly to GPS uncertainty (capped)
     match_r = float(NEAR_PLANT_RADIUS_M)
@@ -944,7 +917,7 @@ def page_near_me() -> None:
 
     hit = nearest_mapped_plant(mapped, float(lat), float(lon))
     if hit is None:
-        st.warning("Could not match a plant.")
+        st.warning(t("could_not_match"))
         return
 
     plant_n, cluster, dist_m = hit
@@ -957,49 +930,49 @@ def page_near_me() -> None:
     if dist_m <= match_r:
         st.markdown(
             '<div style="text-align:center;padding:1.2rem 0 0.4rem 0;">'
-            '<div style="font-size:0.95rem;opacity:0.75;margin-bottom:0.35rem;">Plant</div>'
+            '<div style="font-size:0.95rem;opacity:0.75;margin-bottom:0.35rem;">%s</div>'
             '<div style="font-size:min(28vw,7.5rem);font-weight:800;line-height:1;'
             "letter-spacing:-0.04em;color:%s;text-shadow:0 1px 0 rgba(0,0,0,0.15);\">"
             "%d</div>"
-            '<div style="margin-top:0.85rem;font-size:1.15rem;">%.1f m away · %s</div>'
+            '<div style="margin-top:0.85rem;font-size:1.15rem;">%s</div>'
             '<div style="margin-top:0.35rem;font-size:0.95rem;opacity:0.8;">%s</div>'
             "</div>"
-            % (color, plant_n, dist_m, html.escape(label), html.escape(title)),
+            % (
+                html.escape(t("plant_word")),
+                color,
+                plant_n,
+                html.escape(t("m_away_health", dist_m, label)),
+                html.escape(title),
+            ),
             unsafe_allow_html=True,
         )
         if match_r > NEAR_PLANT_RADIUS_M:
-            st.caption(
-                "Matched within GPS uncertainty (±%.0f m). Confirm the plant visually."
-                % (acc_m or match_r)
-            )
+            st.caption(t("matched_uncertainty", acc_m or match_r))
         st.session_state["selected_cluster_idx"] = max(0, plant_n - 1)
         st.session_state["plant_select_main"] = max(0, plant_n - 1)
-        st.caption("Open **Map view** in the menu to see photos for this plant number.")
+        st.caption(t("open_map_for_photos"))
     else:
         st.markdown(
             '<div style="text-align:center;padding:1.5rem 0 0.5rem 0;">'
             '<div style="font-size:clamp(1.6rem,7vw,2.4rem);font-weight:700;line-height:1.2;">'
-            "No plant within %.0f m</div>"
+            "%s</div>"
             "</div>"
-            % match_r,
+            % html.escape(t("no_plant_within", match_r)),
             unsafe_allow_html=True,
         )
         st.markdown(
             '<div style="text-align:center;opacity:0.85;">'
-            "Nearest: <b>#%d</b> at <b>%.1f m</b> · %s"
+            "%s"
             "</div>"
-            % (plant_n, dist_m, html.escape(label)),
+            % t("nearest_plant", plant_n, dist_m, html.escape(label)),
             unsafe_allow_html=True,
         )
 
 
 
 def page_plant_mapping() -> None:
-    st.title("Plant Mapping")
-    st.caption(
-        "Drive auth uses Streamlit Secrets only (no browser). "
-        "Choose folders and run health + GPS/altitude analysis."
-    )
+    st.title(t("mapping_title"))
+    st.caption(t("mapping_caption"))
 
     ensure_drive_from_secrets()
     secret_status = reload_env() or {}
@@ -1008,12 +981,17 @@ def page_plant_mapping() -> None:
     st.session_state["drive_ready"] = ready
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("OpenAI key", "Ready" if status["openai"] else "Missing")
-    c2.metric("Drive credentials", "Ready" if status["credentials"] else "Missing")
-    c3.metric("Drive (Secrets)", "Connected" if ready else "Not ready")
-    c4.metric("Folder ID", "Set" if status["folder"] else "Missing")
+    c1.metric(t("metric_openai"), t("ready") if status["openai"] else t("missing"))
+    c2.metric(
+        t("metric_drive_creds"), t("ready") if status["credentials"] else t("missing")
+    )
+    c3.metric(
+        t("metric_drive_secrets"),
+        t("drive_connected") if ready else t("not_ready"),
+    )
+    c4.metric(t("metric_folder"), t("set") if status["folder"] else t("missing"))
 
-    with st.expander("Cloud secrets status", expanded=not ready):
+    with st.expander(t("cloud_secrets_status"), expanded=not ready):
         st.write(
             {
                 "secrets_available": secret_status.get("secrets_available"),
@@ -1028,19 +1006,13 @@ def page_plant_mapping() -> None:
             }
         )
         if not ready:
-            st.warning(
-                "Add `GOOGLE_CREDENTIALS_B64` and `GOOGLE_TOKEN_B64` in the "
-                "**Streamlit Cloud dashboard** (**Manage app → Settings → Secrets**, "
-                "not inside this app) — from `python make_cloud_secrets.py` on your PC — "
-                "reboot, then click **Connect from Secrets**. "
-                "The app never opens a Google login browser."
-            )
+            st.warning(t("secrets_help"))
 
-    st.subheader("Google Drive (Secrets)")
+    st.subheader(t("gdrive_secrets_header"))
     gc1, gc2, gc3 = st.columns([1.2, 1, 2])
     with gc1:
         main_connect = st.button(
-            "Connect from Secrets",
+            t("connect_from_secrets"),
             type="primary",
             use_container_width=True,
             disabled=not status["credentials"] and not secret_status.get("credentials_written"),
@@ -1048,31 +1020,31 @@ def page_plant_mapping() -> None:
         )
     with gc2:
         main_disconnect = st.button(
-            "Disconnect",
+            t("disconnect"),
             use_container_width=True,
             disabled=not ready,
             key="main_disconnect_google",
         )
     with gc3:
         if not status["credentials"]:
-            st.error("Missing `GOOGLE_CREDENTIALS_B64` in Secrets.")
+            st.error(t("missing_creds_b64"))
         elif ready:
-            st.success("Google Drive connected via Secrets.")
+            st.success(t("drive_connected_secrets"))
         else:
-            st.warning("Not ready — click **Connect from Secrets**.")
+            st.warning(t("not_ready_click_connect"))
 
     handle_google_auth(bool(main_connect), bool(main_disconnect))
     status = setup_ok()
     ready = bool(st.session_state.get("drive_ready")) or status["token"]
 
-    st.subheader("1. Select folders")
+    st.subheader(t("select_folders"))
     root_folder_id = st.text_input(
-        "Root Google Drive folder ID",
+        t("root_folder_id"),
         value=DRIVE_FOLDER_ID,
-        help="Top-level palm photos folder.",
+        help=t("root_folder_help"),
     )
     refresh = st.button(
-        "Refresh folder list",
+        t("refresh_folders"),
         use_container_width=True,
         disabled=not ready,
     )
@@ -1102,11 +1074,11 @@ def page_plant_mapping() -> None:
     if folder_error:
         st.error(folder_error)
     elif not ready:
-        st.info("Click **Connect from Secrets**, then refresh the folder list.")
+        st.info(t("connect_then_refresh"))
     elif not folders and not st.session_state.get("folders_loaded"):
-        st.info("Click **Refresh folder list**.")
+        st.info(t("click_refresh_folders"))
     elif not folders:
-        st.warning("No subfolders found under this root.")
+        st.warning(t("no_subfolders"))
     else:
         path_options = [f["path"] for f in folders]
         default_paths = [
@@ -1114,31 +1086,31 @@ def page_plant_mapping() -> None:
             if p in path_options
         ]
         selected_paths = st.multiselect(
-            "Folders to process",
+            t("folders_to_process"),
             options=path_options,
             default=default_paths,
         )
         st.session_state["selected_folder_paths"] = selected_paths
-        st.caption("%d of %d folder(s) selected" % (len(selected_paths), len(path_options)))
+        st.caption(t("folders_selected", len(selected_paths), len(path_options)))
 
-    with st.expander("Advanced options", expanded=False):
+    with st.expander(t("advanced"), expanded=False):
         process_entire_root = st.checkbox(
-            "Process entire farm root (all nested photos)",
+            t("process_entire_root"),
             value=False,
             key="opt_entire_root",
         )
         start_fresh = st.checkbox(
-            "Start fresh (clear previous analysis + exports)",
+            t("start_fresh"),
             value=False,
             key="opt_fresh",
         )
         reanalyze = st.checkbox(
-            "Re-analyze photos already cached",
+            t("reanalyze"),
             value=False,
             key="opt_reanalyze",
         )
-        force_dl = st.checkbox("Re-download all photos from Drive", value=False, key="opt_force_dl")
-        st.caption("Cache: `%s`" % CACHE_DIR)
+        force_dl = st.checkbox(t("force_dl"), value=False, key="opt_force_dl")
+        st.caption(t("cache_path", CACHE_DIR))
 
     process_entire_root = st.session_state.get("opt_entire_root", False)
     start_fresh = st.session_state.get("opt_fresh", False)
@@ -1153,9 +1125,9 @@ def page_plant_mapping() -> None:
 
     can_run = ready and (process_entire_root or bool(selected_folders))
 
-    st.subheader("2. Run analysis")
+    st.subheader(t("run_analysis"))
     run = st.button(
-        "Sync & analyze (from scratch)" if start_fresh else "Sync & analyze",
+        t("sync_analyze_scratch") if start_fresh else t("sync_analyze"),
         type="primary",
         use_container_width=True,
         disabled=not can_run,
@@ -1163,11 +1135,11 @@ def page_plant_mapping() -> None:
 
     if run:
         if not status["openai"]:
-            st.error("Save OPENAI_API_KEY in palm_mapper/.env, then refresh.")
+            st.error(t("need_openai"))
         elif not status["credentials"]:
-            st.error("Add credentials/credentials.json first.")
+            st.error(t("need_creds_file"))
         elif not process_entire_root and not selected_folders:
-            st.error("Select at least one folder, or enable **Process entire farm root**.")
+            st.error(t("need_folder"))
         else:
             from services.pipeline import reset_analysis_state
 
@@ -1180,7 +1152,7 @@ def page_plant_mapping() -> None:
 
             if process_entire_root:
                 folder_ids = [root_folder_id]
-                folder_paths = {root_folder_id: "Chinnagudipet farm (entire root)"}
+                folder_paths = {root_folder_id: t("farm_entire_root")}
             else:
                 folder_ids = [f["id"] for f in selected_folders]
                 folder_paths = {f["id"]: f["path"] for f in selected_folders}
@@ -1189,7 +1161,7 @@ def page_plant_mapping() -> None:
                 if start_fresh:
                     reset_analysis_state(clear_exports=True)
                     observations_from_state.clear()
-                with st.spinner("Syncing & analyzing…"):
+                with st.spinner(t("syncing_analyzing")):
                     summary = run_pipeline(
                         folder_ids=folder_ids,
                         folder_paths=folder_paths,
@@ -1204,9 +1176,8 @@ def page_plant_mapping() -> None:
                     1 for p in summary.get("latest") or [] if p.get("altitude") is not None
                 )
                 st.success(
-                    "Mapped **%d** plants · analyzed **%d** · with altitude **%d** · "
-                    "consolidated **%d**"
-                    % (
+                    t(
+                        "mapped_summary",
                         summary["plants_on_map"],
                         summary["analyzed_now"],
                         with_alt,
@@ -1226,25 +1197,25 @@ def page_plant_mapping() -> None:
             1 for p in summary.get("latest") or [] if p.get("altitude") is not None
         )
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Photos in selection", summary.get("photos_on_drive", 0))
-        m2.metric("On map (this run)", summary.get("plants_on_map", 0))
-        m3.metric("Analyzed now", summary.get("analyzed_now", 0))
-        m4.metric("With altitude", with_alt)
-        m5.metric("Consolidated plants", summary.get("plants_consolidated", 0))
+        m1.metric(t("photos_in_selection"), summary.get("photos_on_drive", 0))
+        m2.metric(t("on_map_this_run"), summary.get("plants_on_map", 0))
+        m3.metric(t("analyzed_now"), summary.get("analyzed_now", 0))
+        m4.metric(t("with_altitude"), with_alt)
+        m5.metric(t("consolidated_plants"), summary.get("plants_consolidated", 0))
         if summary.get("selected_folders"):
-            st.caption("Processed: " + ", ".join(summary["selected_folders"]))
+            st.caption(t("processed_folders", ", ".join(summary["selected_folders"])))
 
-    st.subheader("Exports")
+    st.subheader(t("exports"))
     kml_path = OUTPUT_DIR / "palm_health.kml"
     kmz_path = OUTPUT_DIR / "palm_health.kmz"
     consolidated_kml = OUTPUT_DIR / "palm_health_consolidated.kml"
     consolidated_kmz = OUTPUT_DIR / "palm_health_consolidated.kmz"
-    st.caption("Output folder: `%s`" % OUTPUT_DIR)
+    st.caption(t("output_folder", OUTPUT_DIR))
 
     col_a, col_b, col_c, col_d = st.columns(4)
     if kml_path.exists():
         col_a.download_button(
-            "This-run KML",
+            t("this_run_kml"),
             data=kml_path.read_bytes(),
             file_name="palm_health.kml",
             mime="application/vnd.google-earth.kml+xml",
@@ -1252,7 +1223,7 @@ def page_plant_mapping() -> None:
         )
     if kmz_path.exists():
         col_b.download_button(
-            "This-run KMZ",
+            t("this_run_kmz"),
             data=kmz_path.read_bytes(),
             file_name="palm_health.kmz",
             mime="application/vnd.google-earth.kmz",
@@ -1260,7 +1231,7 @@ def page_plant_mapping() -> None:
         )
     if consolidated_kml.exists():
         col_c.download_button(
-            "Consolidated KML",
+            t("consolidated_kml_btn"),
             data=consolidated_kml.read_bytes(),
             file_name="palm_health_consolidated.kml",
             mime="application/vnd.google-earth.kml+xml",
@@ -1268,23 +1239,23 @@ def page_plant_mapping() -> None:
         )
     if consolidated_kmz.exists():
         col_d.download_button(
-            "Consolidated KMZ",
+            t("consolidated_kmz_btn"),
             data=consolidated_kmz.read_bytes(),
             file_name="palm_health_consolidated.kmz",
             mime="application/vnd.google-earth.kmz",
             use_container_width=True,
         )
 
-    if st.button("Rebuild consolidated map from all stored plants"):
+    if st.button(t("rebuild_map")):
         from services.pipeline import rebuild_consolidated_exports
 
-        with st.spinner("Rebuilding consolidated KML/KMZ (may take several minutes)…"):
+        with st.spinner(t("rebuilding_exports")):
             try:
                 rebuilt = rebuild_consolidated_exports()
                 observations_from_state.clear()
                 st.success(
-                    "Rebuilt **%d** plants (%.0f m spacing) → `%s`"
-                    % (
+                    t(
+                        "rebuilt_ok",
                         rebuilt["plants_consolidated"],
                         rebuilt.get("plant_spacing_m", DEFAULT_PLANT_SPACING_M),
                         rebuilt["consolidated_kml_path"],
@@ -1293,7 +1264,7 @@ def page_plant_mapping() -> None:
             except Exception as exc:
                 st.exception(exc)
 
-    st.subheader("Plant table (full farm)")
+    st.subheader(t("plant_table"))
     clusters = load_all_clusters()
     if clusters:
         rows = [
@@ -1315,14 +1286,17 @@ def page_plant_mapping() -> None:
         ]
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
     else:
-        st.write("No observations stored yet.")
+        st.write(t("no_obs"))
 
 
 # ---- Sidebar navigation ----
-st.sidebar.title("Palm Mapper")
+st.sidebar.title(t("app_title"))
+_PAGE_MAP = t("page_map")
+_PAGE_NEAR = t("page_near")
+_PAGE_MAPPING = t("page_mapping")
 page = st.sidebar.radio(
-    "Menu",
-    options=["Map view", "Near me", "Plant Mapping"],
+    t("menu"),
+    options=[_PAGE_MAP, _PAGE_NEAR, _PAGE_MAPPING],
     index=0,
     key="nav_page",
 )
@@ -1332,29 +1306,32 @@ status = setup_ok()
 drive_ok = bool(st.session_state.get("drive_ready"))
 st.sidebar.markdown("---")
 st.sidebar.caption(
-    "Drive: %s (Secrets)" % ("connected" if drive_ok else "not connected")
+    t(
+        "drive_secrets_caption",
+        t("drive_connected") if drive_ok else t("drive_not_connected"),
+    )
 )
-if page == "Plant Mapping":
+if page == _PAGE_MAPPING:
     side_connect = st.sidebar.button(
-        "Connect from Secrets",
+        t("connect_from_secrets"),
         key="sidebar_connect_google",
         disabled=not status["credentials"],
     )
     side_disconnect = st.sidebar.button(
-        "Disconnect",
+        t("disconnect"),
         key="sidebar_disconnect_google",
         disabled=not drive_ok,
     )
     handle_google_auth(bool(side_connect), bool(side_disconnect))
 
 st.sidebar.markdown("---")
-st.sidebar.header("Legend")
+st.sidebar.header(t("legend"))
 for key, meta in HEALTH_COLORS.items():
-    st.sidebar.markdown("**%s** — %s" % (key.capitalize(), meta["label"]))
+    st.sidebar.markdown("**%s**" % meta["label"])
 
-if page == "Map view":
+if page == _PAGE_MAP:
     page_map_view()
-elif page == "Near me":
+elif page == _PAGE_NEAR:
     page_near_me()
 else:
     page_plant_mapping()
