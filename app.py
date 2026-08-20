@@ -7,7 +7,7 @@ import io
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import folium
 import pandas as pd
@@ -41,6 +41,7 @@ from services.drive import (  # noqa: E402
 from services.models import (  # noqa: E402
     DEFAULT_PHOTO_RADIUS_M,
     DEFAULT_PLANT_SPACING_M,
+    NEAR_PLANT_RADIUS_M,
     PlantCluster,
     PlantObservation,
     cluster_by_radius,
@@ -302,6 +303,36 @@ def nearest_cluster_index(clusters, lat, lon):
             best_d = d
             best_i = i
     return best_i
+
+
+def mapped_clusters_for_map(clusters: List[PlantCluster]) -> List[PlantCluster]:
+    """Same plants Map View numbers: mapped clusters with display/map coords."""
+    return [
+        c
+        for c in clusters
+        if c.representative.map_latitude is not None
+        and c.representative.map_longitude is not None
+    ]
+
+
+def nearest_mapped_plant(
+    mapped: List[PlantCluster], lat: float, lon: float
+) -> Optional[Tuple[int, PlantCluster, float]]:
+    """
+    Return (plant_number_1based, cluster, distance_m) for the nearest mapped plant,
+    or None if the list is empty.
+    """
+    best = None
+    best_d = 1e18
+    for n, c in enumerate(mapped, start=1):
+        p = c.representative
+        d = haversine_m(
+            lat, lon, float(p.map_latitude), float(p.map_longitude)
+        )
+        if d < best_d:
+            best_d = d
+            best = (n, c, d)
+    return best
 
 
 def load_all_clusters() -> List[PlantCluster]:
@@ -707,6 +738,128 @@ def page_map_view() -> None:
                 )
 
 
+def _read_device_gps():
+    """
+    Browser geolocation via streamlit-geolocation (navigator.geolocation).
+    Returns (lat, lon, accuracy_m) or (None, None, None).
+    Requires HTTPS (Streamlit Cloud) or localhost; user must tap the location button.
+    """
+    try:
+        from streamlit_geolocation import streamlit_geolocation
+    except ImportError:
+        st.warning(
+            "Install **streamlit-geolocation** (`pip install streamlit-geolocation`) "
+            "to read GPS on this device."
+        )
+        return None, None, None
+
+    st.caption("Tap the location button, allow GPS when prompted, then wait a moment.")
+    location = streamlit_geolocation()
+    if not location or location == "No Location Info":
+        return None, None, None
+    if not isinstance(location, dict):
+        return None, None, None
+    lat = location.get("latitude")
+    lon = location.get("longitude")
+    if lat is None or lon is None:
+        return None, None, None
+    try:
+        return float(lat), float(lon), location.get("accuracy")
+    except (TypeError, ValueError):
+        return None, None, None
+
+
+def page_near_me() -> None:
+    """Mobile-first: GPS → nearest map plant number within NEAR_PLANT_RADIUS_M."""
+    st.title("Near me")
+    st.caption(
+        "Stand next to a plant and use your phone GPS. "
+        "Matches Map View plant numbers (map positions after ~9 m realignment)."
+    )
+
+    mapped = mapped_clusters_for_map(load_all_clusters())
+    if not mapped:
+        st.info(
+            "No mapped plants yet. Open **Plant Mapping** to sync, or **Map view** to confirm data."
+        )
+        return
+
+    col_gps, col_refresh = st.columns([2, 1])
+    with col_gps:
+        lat, lon, accuracy = _read_device_gps()
+    with col_refresh:
+        st.write("")  # align with component button
+        if st.button("Refresh", use_container_width=True, key="near_me_refresh"):
+            st.rerun()
+
+    # Keep last good fix so a component remount does not blank the UI
+    if lat is not None and lon is not None:
+        st.session_state["near_me_lat"] = lat
+        st.session_state["near_me_lon"] = lon
+        st.session_state["near_me_acc"] = accuracy
+    else:
+        lat = st.session_state.get("near_me_lat")
+        lon = st.session_state.get("near_me_lon")
+        accuracy = st.session_state.get("near_me_acc")
+
+    if lat is None or lon is None:
+        st.info("Waiting for location… Allow location access, then tap the location button again if needed.")
+        return
+
+    acc_txt = ""
+    if accuracy is not None:
+        try:
+            acc_txt = " · GPS ±%.0f m" % float(accuracy)
+        except (TypeError, ValueError):
+            acc_txt = ""
+    st.caption("Your location: %.6f, %.6f%s" % (lat, lon, acc_txt))
+
+    hit = nearest_mapped_plant(mapped, float(lat), float(lon))
+    if hit is None:
+        st.warning("Could not match a plant.")
+        return
+
+    plant_n, cluster, dist_m = hit
+    p = cluster.representative
+    health = p.health if p.health in HEALTH_COLORS else "white"
+    color = HEALTH_COLORS[health]["hex"]
+    label = HEALTH_COLORS[health]["label"]
+    title = p.plant_id or Path(p.file_name).stem
+
+    if dist_m <= NEAR_PLANT_RADIUS_M:
+        st.markdown(
+            '<div style="text-align:center;padding:1.2rem 0 0.4rem 0;">'
+            '<div style="font-size:0.95rem;opacity:0.75;margin-bottom:0.35rem;">Plant</div>'
+            '<div style="font-size:min(28vw,7.5rem);font-weight:800;line-height:1;'
+            "letter-spacing:-0.04em;color:%s;text-shadow:0 1px 0 rgba(0,0,0,0.15);\">"
+            "%d</div>"
+            '<div style="margin-top:0.85rem;font-size:1.15rem;">%.1f m away · %s</div>'
+            '<div style="margin-top:0.35rem;font-size:0.95rem;opacity:0.8;">%s</div>'
+            "</div>"
+            % (color, plant_n, dist_m, html.escape(label), html.escape(title)),
+            unsafe_allow_html=True,
+        )
+        st.session_state["selected_cluster_idx"] = max(0, plant_n - 1)
+        st.session_state["plant_select_main"] = max(0, plant_n - 1)
+        st.caption("Open **Map view** in the menu to see photos for this plant number.")
+    else:
+        st.markdown(
+            '<div style="text-align:center;padding:1.5rem 0 0.5rem 0;">'
+            '<div style="font-size:clamp(1.6rem,7vw,2.4rem);font-weight:700;line-height:1.2;">'
+            "No plant within %.0f m</div>"
+            "</div>"
+            % NEAR_PLANT_RADIUS_M,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div style="text-align:center;opacity:0.85;">'
+            "Nearest: <b>#%d</b> at <b>%.1f m</b> · %s"
+            "</div>"
+            % (plant_n, dist_m, html.escape(label)),
+            unsafe_allow_html=True,
+        )
+
+
 def page_plant_mapping() -> None:
     st.title("Plant Mapping")
     st.caption(
@@ -1035,7 +1188,7 @@ def page_plant_mapping() -> None:
 st.sidebar.title("Palm Mapper")
 page = st.sidebar.radio(
     "Menu",
-    options=["Map view", "Plant Mapping"],
+    options=["Map view", "Near me", "Plant Mapping"],
     index=0,
     key="nav_page",
 )
@@ -1067,5 +1220,7 @@ for key, meta in HEALTH_COLORS.items():
 
 if page == "Map view":
     page_map_view()
+elif page == "Near me":
+    page_near_me()
 else:
     page_plant_mapping()

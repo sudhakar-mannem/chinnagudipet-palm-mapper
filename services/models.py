@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 DEFAULT_PHOTO_RADIUS_M = 4.0
 # Target center-to-center spacing when realigning plant icons on the map / KML.
 DEFAULT_PLANT_SPACING_M = 9.0
+# Near-me page: plant is a match when within this distance of device GPS.
+NEAR_PLANT_RADIUS_M = 2.0
 
 # Local ENU meters ↔ degrees (sufficient at farm scale).
 _METERS_PER_DEG_LAT = 111_320.0
