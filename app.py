@@ -165,12 +165,53 @@ def open_in_google_earth(path: Path) -> str:
         return "Could not open Google Earth (%s). Open the file manually: %s" % (exc, path)
 
 
+def _plantation_map_frame(
+    mapped: List[PlantCluster],
+    max_radius_m: float = 2500.0,
+):
+    """
+    Median center + inlier coords for the initial map view.
+
+    Mean of all map coords is pulled far off-farm by corrupt GPS (e.g. lat≈lon≈79
+    or photos from another region). Median + distance filter keeps the viewport
+    on the main plantation without changing markers or realignment.
+    """
+    coords = [
+        (float(c.representative.map_latitude), float(c.representative.map_longitude))
+        for c in mapped
+        if c.representative.map_latitude is not None
+        and c.representative.map_longitude is not None
+    ]
+    lats = sorted(lat for lat, _ in coords)
+    lons = sorted(lon for _, lon in coords)
+    med_lat = lats[len(lats) // 2]
+    med_lon = lons[len(lons) // 2]
+    core = [
+        (lat, lon)
+        for lat, lon in coords
+        if haversine_m(lat, lon, med_lat, med_lon) <= max_radius_m
+    ]
+    if len(core) < 2:
+        core = coords
+    core_lats = sorted(lat for lat, _ in core)
+    core_lons = sorted(lon for _, lon in core)
+    return (
+        core_lats[len(core_lats) // 2],
+        core_lons[len(core_lons) // 2],
+        core,
+    )
+
+
 def build_map(clusters: List[PlantCluster]):
-    mapped = [c for c in clusters if c.representative.map_latitude is not None]
+    mapped = [
+        c
+        for c in clusters
+        if c.representative.map_latitude is not None
+        and c.representative.map_longitude is not None
+    ]
     if not mapped:
         return None
-    center_lat = sum(float(c.representative.map_latitude) for c in mapped) / len(mapped)
-    center_lon = sum(float(c.representative.map_longitude) for c in mapped) / len(mapped)
+    center_lat, center_lon, frame_coords = _plantation_map_frame(mapped)
     fmap = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=17,
@@ -236,6 +277,14 @@ def build_map(clusters: List[PlantCluster]):
                 class_name="plant-num-marker",
             ),
         ).add_to(fmap)
+
+    if len(frame_coords) >= 2:
+        frame_lats = [lat for lat, _ in frame_coords]
+        frame_lons = [lon for _, lon in frame_coords]
+        fmap.fit_bounds(
+            [[min(frame_lats), min(frame_lons)], [max(frame_lats), max(frame_lons)]],
+            padding=(24, 24),
+        )
 
     folium.LayerControl().add_to(fmap)
     return fmap
