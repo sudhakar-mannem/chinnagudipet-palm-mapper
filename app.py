@@ -997,9 +997,11 @@ def _read_device_gps():
               const msgWait = %s;
               const errPrefix = %s;
               const noGeo = %s;
+              
               function fail(msg) {
                 if (status) status.textContent = msg;
               }
+              
               function applyToParent(best, failed) {
                 try {
                   const u = new URL(window.parent.location.href);
@@ -1019,64 +1021,104 @@ def _read_device_gps():
                   fail(String(e));
                 }
               }
+              
               // Critical: use PARENT navigator — iframe geolocation is often coarse-only
               const geoHost = (window.parent && window.parent.navigator &&
                                window.parent.navigator.geolocation)
                 ? window.parent.navigator.geolocation
                 : navigator.geolocation;
+              
               if (!geoHost) {
                 fail(noGeo);
                 return;
               }
+              
+              // Aggressive GPS options for maximum accuracy
               const opts = {
-                enableHighAccuracy: true,
-                maximumAge: 0,
-                timeout: 90000
+                enableHighAccuracy: true,  // Force GPS hardware
+                maximumAge: 0,              // No cached positions
+                timeout: 60000              // 60 seconds max per attempt
               };
+              
               let best = null;
               let samples = 0;
-              const watchId = geoHost.watchPosition(
-                function (pos) {
-                  samples += 1;
-                  const c = pos.coords;
-                  const fix = {
-                    latitude: c.latitude,
-                    longitude: c.longitude,
-                    accuracy: c.accuracy
-                  };
-                  if (!best || fix.accuracy < best.accuracy) {
-                    best = fix;
-                  }
-                  if (status) {
-                    status.textContent =
-                      "GPS ±" + Math.round(best.accuracy) + " m — " +
-                      (best.accuracy <= 20 ? msgGood : msgWait) +
-                      " (" + samples + ")";
-                  }
-                  if (best.accuracy <= 20) {
-                    try { geoHost.clearWatch(watchId); } catch (e) {}
-                    applyToParent(best, false);
-                  }
-                },
-                function (err) {
-                  fail(errPrefix + (err && err.message ? err.message : String(err)));
-                },
-                opts
-              );
-              // After 35s: accept if <= 50 m, else fail (don't use ±2000 m fixes)
+              let watchId = null;
+              let accepted = false;
+              
+              // Function to update status display
+              function updateStatus() {
+                if (!status || !best) return;
+                const acc = Math.round(best.accuracy);
+                const emoji = acc <= 10 ? "🎯" : acc <= 20 ? "✓" : "📡";
+                status.textContent = emoji + " GPS ±" + acc + " m — " +
+                  (acc <= 15 ? msgGood : msgWait) + " (samples: " + samples + ")";
+              }
+              
+              // Success handler
+              function onPosition(pos) {
+                samples += 1;
+                const c = pos.coords;
+                const fix = {
+                  latitude: c.latitude,
+                  longitude: c.longitude,
+                  accuracy: c.accuracy
+                };
+                
+                // Keep the best (most accurate) reading
+                if (!best || fix.accuracy < best.accuracy) {
+                  best = fix;
+                  updateStatus();
+                }
+                
+                // Accept immediately if accuracy is excellent (≤15m)
+                // This matches GPS Map cam app precision
+                if (best.accuracy <= 15 && !accepted) {
+                  accepted = true;
+                  try { geoHost.clearWatch(watchId); } catch (e) {}
+                  applyToParent(best, false);
+                }
+              }
+              
+              // Error handler
+              function onError(err) {
+                console.error("GPS Error:", err);
+                let msg = errPrefix;
+                if (err.code === 1) msg += "Permission denied";
+                else if (err.code === 2) msg += "Position unavailable";
+                else if (err.code === 3) msg += "Timeout";
+                else msg += (err.message || String(err));
+                fail(msg);
+              }
+              
+              // Start continuous GPS watch
+              try {
+                watchId = geoHost.watchPosition(onPosition, onError, opts);
+              } catch (e) {
+                fail(errPrefix + String(e));
+                return;
+              }
+              
+              // Fallback timeout: after 45 seconds, accept best reading if reasonable
               setTimeout(function () {
+                if (accepted) return; // Already accepted
                 try { geoHost.clearWatch(watchId); } catch (e) {}
+                
                 if (!best) {
-                  fail(errPrefix + "timeout");
+                  fail(errPrefix + "No GPS signal received. Please check Location Services.");
                   applyToParent(null, true);
                   return;
                 }
-                if (best.accuracy <= 50) {
+                
+                // Only accept if accuracy is decent (≤25m)
+                // Reject coarse network locations (>25m)
+                if (best.accuracy <= 25) {
+                  accepted = true;
                   applyToParent(best, false);
                 } else {
+                  fail("GPS accuracy too poor (±" + Math.round(best.accuracy) + "m). Please try outdoors with clear sky view.");
                   applyToParent(best, true);
                 }
-              }, 35000);
+              }, 45000);
             })();
             </script>
             """
@@ -1153,7 +1195,37 @@ def page_near_me() -> None:
         acc_m = None
 
     acc_txt = t("acc_suffix", acc_m) if acc_m is not None else ""
-    st.caption(t("your_location", lat, lon, acc_txt))
+    
+    # Visual GPS accuracy indicator
+    if acc_m is not None:
+        if acc_m <= 15:
+            acc_emoji = "🎯"
+            acc_quality = "Excellent"
+            acc_color = "green"
+        elif acc_m <= 25:
+            acc_emoji = "✓"
+            acc_quality = "Good"
+            acc_color = "blue"
+        elif acc_m <= 50:
+            acc_emoji = "📡"
+            acc_quality = "Fair"
+            acc_color = "orange"
+        else:
+            acc_emoji = "⚠️"
+            acc_quality = "Poor"
+            acc_color = "red"
+        
+        st.markdown(
+            f'<div style="text-align:center;padding:0.5rem;background:rgba(0,0,0,0.03);border-radius:8px;margin-bottom:1rem;">'
+            f'<span style="font-size:1.5rem;">{acc_emoji}</span> '
+            f'<span style="color:{acc_color};font-weight:600;">{acc_quality}</span> GPS accuracy: '
+            f'<strong>±{acc_m:.0f}m</strong><br/>'
+            f'<small style="opacity:0.7;">📍 {lat:.6f}, {lon:.6f}</small>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+    else:
+        st.caption(t("your_location", lat, lon, acc_txt))
 
     farm = _plantation_median_lat_lon(mapped)
     if farm is not None:
@@ -1164,6 +1236,29 @@ def page_near_me() -> None:
 
     if acc_m is not None and acc_m > 40:
         st.warning(t("gps_accuracy_poor", acc_m))
+        with st.expander("📡 How to improve GPS accuracy", expanded=True):
+            st.markdown("""
+            **Your GPS accuracy is poor (±{:.0f}m). For better results:**
+            
+            🌤️ **Move to open sky** - Step away from buildings, trees, and roofs
+            
+            ⏱️ **Wait 30-60 seconds** - GPS needs time to lock onto satellites
+            
+            📱 **Check Location Settings:**
+            - Ensure "High Accuracy" or "GPS Only" mode is enabled
+            - Disable "Wi-Fi" or "Network" location (use GPS hardware)
+            - Allow location permission for your browser
+            
+            🔋 **Enable airplane mode** - Then re-enable just mobile data (forces GPS)
+            
+            📍 **Try GPS Test apps** - Apps like "GPS Status" can show satellite lock
+            
+            ❌ **Avoid indoor use** - GPS rarely works indoors
+            
+            *GPS Map cam apps work better because they wait for true GPS satellite lock, not network location.*
+            """.format(acc_m))
+    elif acc_m is not None and acc_m > 20:
+        st.info(f"📡 GPS accuracy: ±{acc_m:.0f}m. For better precision, move to open sky and wait longer.")
 
     # Effective match radius: at least 2 m, but widen slightly to GPS uncertainty (capped)
     match_r = float(NEAR_PLANT_RADIUS_M)
