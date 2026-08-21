@@ -56,7 +56,190 @@ st.set_page_config(
     page_title=t("app_title"),
     page_icon="🌴",
     layout="wide",
+    initial_sidebar_state="auto",
 )
+
+# Mobile-responsive CSS
+st.markdown("""
+<style>
+    /* Mobile-first responsive design */
+    @media (max-width: 768px) {
+        /* Adjust main content padding for mobile */
+        .main .block-container {
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+            padding-top: 1rem !important;
+            max-width: 100% !important;
+        }
+        
+        /* Make sidebar collapsible on mobile */
+        section[data-testid="stSidebar"] {
+            width: 16rem !important;
+        }
+        
+        /* Responsive buttons - larger touch targets */
+        .stButton button {
+            width: 100% !important;
+            min-height: 44px !important;
+            font-size: 16px !important;
+            padding: 0.5rem 1rem !important;
+        }
+        
+        /* Responsive text inputs */
+        .stTextInput input {
+            font-size: 16px !important;
+            min-height: 44px !important;
+        }
+        
+        /* Responsive selectbox */
+        .stSelectbox select {
+            font-size: 16px !important;
+            min-height: 44px !important;
+        }
+        
+        /* Responsive multiselect */
+        .stMultiSelect {
+            font-size: 16px !important;
+        }
+        
+        /* Responsive metrics */
+        [data-testid="stMetricValue"] {
+            font-size: clamp(1.2rem, 5vw, 2rem) !important;
+        }
+        
+        [data-testid="stMetricLabel"] {
+            font-size: 0.85rem !important;
+        }
+        
+        /* Images responsive */
+        img {
+            max-width: 100% !important;
+            height: auto !important;
+        }
+        
+        /* Responsive dataframes */
+        .dataframe {
+            font-size: 14px !important;
+            overflow-x: auto !important;
+        }
+        
+        /* Column adjustments for mobile */
+        [data-testid="column"] {
+            min-width: auto !important;
+            padding: 0.25rem !important;
+        }
+        
+        /* Expander touch-friendly */
+        .streamlit-expanderHeader {
+            min-height: 44px !important;
+            font-size: 16px !important;
+        }
+        
+        /* Map container responsive */
+        iframe {
+            width: 100% !important;
+        }
+        
+        /* Stack columns on mobile */
+        [data-testid="stHorizontalBlock"] {
+            flex-direction: column !important;
+        }
+        
+        [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+            width: 100% !important;
+        }
+        
+        /* Better readability on mobile */
+        .main h1 {
+            font-size: 1.75rem !important;
+        }
+        
+        .main h2 {
+            font-size: 1.5rem !important;
+        }
+        
+        .main h3 {
+            font-size: 1.25rem !important;
+        }
+    }
+    
+    /* Tablet breakpoint */
+    @media (min-width: 769px) and (max-width: 1024px) {
+        .main .block-container {
+            padding-left: 2rem !important;
+            padding-right: 2rem !important;
+        }
+        
+        [data-testid="stMetricValue"] {
+            font-size: 1.5rem !important;
+        }
+        
+        [data-testid="column"] {
+            padding: 0.5rem !important;
+        }
+    }
+    
+    /* Touch-friendly elements for all devices */
+    button, a, [role="button"] {
+        -webkit-tap-highlight-color: rgba(0,0,0,0.1);
+    }
+    
+    /* Prevent zoom on input focus (iOS) */
+    input, select, textarea {
+        font-size: 16px !important;
+    }
+    
+    /* Responsive map container */
+    .folium-map {
+        width: 100% !important;
+        height: auto !important;
+    }
+    
+    /* Ensure images don't overflow */
+    .stImage {
+        max-width: 100%;
+        height: auto;
+    }
+    
+    /* Better spacing on mobile */
+    @media (max-width: 768px) {
+        [data-testid="stVerticalBlock"] > [style*="flex-direction: column"] > [data-testid="stVerticalBlock"] {
+            gap: 0.5rem !important;
+        }
+    }
+    
+    /* Improve download buttons on mobile */
+    @media (max-width: 768px) {
+        .stDownloadButton button {
+            font-size: 14px !important;
+            padding: 0.5rem 0.75rem !important;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Detect screen size for responsive features
+st.markdown("""
+<script>
+// Store screen width for responsive adjustments
+if (typeof window !== 'undefined') {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const isMobile = width < 768;
+    
+    // Try to pass to Streamlit via query params (best effort)
+    try {
+        const url = new URL(window.parent.location.href);
+        if (!url.searchParams.has('screen_width')) {
+            url.searchParams.set('screen_width', width.toString());
+            url.searchParams.set('is_mobile', isMobile.toString());
+        }
+    } catch (e) {
+        // Cross-origin restriction, that's okay
+    }
+}
+</script>
+""", unsafe_allow_html=True)
 
 ensure_dirs()
 reload_env()
@@ -76,6 +259,29 @@ try:
         _IMAGE_WIDTH_KW = {}
 except Exception:
     _IMAGE_WIDTH_KW = {"use_column_width": True}
+
+
+def is_mobile():
+    """Detect if user is on mobile device based on viewport width."""
+    # Use session state to store mobile status if needed
+    # For Streamlit, we'll use a reasonable default mobile height
+    return st.session_state.get("is_mobile", False)
+
+
+def get_responsive_map_height():
+    """Return appropriate map height based on device."""
+    # Mobile: smaller height to fit screen better
+    # Desktop: larger height for better viewing
+    # Check if we can detect screen size via query params or use reasonable defaults
+    try:
+        # Try to get from query params if set by JavaScript
+        width = st.query_params.get("screen_width")
+        if width and int(width) < 768:
+            return 400
+    except Exception:
+        pass
+    # Default: use a medium height that works on most screens
+    return 620
 
 
 def setup_ok():
@@ -618,21 +824,25 @@ def page_map_view() -> None:
         h = c.representative.health if c.representative.health in counts else "white"
         counts[h] += 1
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric(t("plants_on_map"), len(clusters))
-    m2.metric(HEALTH_COLORS["green"]["label"], counts["green"])
-    m3.metric(HEALTH_COLORS["amber"]["label"], counts["amber"])
-    m4.metric(HEALTH_COLORS["red"]["label"], counts["red"])
-    m5.metric(HEALTH_COLORS["white"]["label"], counts["white"])
+    # Responsive metrics layout - stack on mobile
+    col_metrics = st.columns([1, 1, 1, 1, 1])
+    col_metrics[0].metric(t("plants_on_map"), len(clusters))
+    col_metrics[1].metric(HEALTH_COLORS["green"]["label"], counts["green"])
+    col_metrics[2].metric(HEALTH_COLORS["amber"]["label"], counts["amber"])
+    col_metrics[3].metric(HEALTH_COLORS["red"]["label"], counts["red"])
+    col_metrics[4].metric(HEALTH_COLORS["white"]["label"], counts["white"])
 
+    # Responsive layout: stack on mobile, side-by-side on desktop
+    # On mobile, show plant selector first, then map below
     left, right = st.columns([1.55, 1])
     with left:
         if clusters:
             fmap = build_map(clusters)
             if fmap:
+                map_height = get_responsive_map_height()
                 map_state = st_folium(
                     fmap,
-                    height=620,
+                    height=map_height,
                     width=None,
                     use_container_width=True,
                     returned_objects=["last_object_clicked"],

@@ -1,8 +1,14 @@
 [server]
 headless = true
+enableXsrfProtection = true
 
 [browser]
 gatherUsageStats = false
 
 [theme]
 base = "light"
+
+[client]
+# Improve mobile performance
+showErrorDetails = true
+toolbarMode = "minimal"
