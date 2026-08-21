@@ -49,6 +49,7 @@ from services.models import (  # noqa: E402
     filter_map_observations,
     haversine_m,
 )
+from services.pipeline import load_state, run_pipeline  # noqa: E402
 from services.ui_te import t  # noqa: E402
 
 st.set_page_config(
