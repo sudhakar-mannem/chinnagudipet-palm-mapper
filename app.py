@@ -950,43 +950,22 @@ def _plantation_median_lat_lon(mapped: List[PlantCluster]) -> Optional[Tuple[flo
 def _read_device_gps():
     """
     High-accuracy browser GPS for mobile Near me.
-
-    Geolocation must run on the parent page (not the components.html iframe),
-    otherwise many phones only return coarse network location (±500–2000 m).
-    Result is written to URL query params on the parent window.
+    
+    Uses Streamlit component API for secure communication.
     """
     import streamlit.components.v1 as components
-
-    params = st.query_params
-    fail_q = params.get("gps_fail")
-    lat_q = params.get("gps_lat")
-    lon_q = params.get("gps_lon")
-    acc_q = params.get("gps_acc")
-
-    if fail_q:
-        try:
-            acc_fail = float(acc_q if not isinstance(acc_q, list) else acc_q[0]) if acc_q else 0.0
-        except (TypeError, ValueError):
-            acc_fail = 0.0
-        st.error(t("gps_coarse_fail", acc_fail))
-        st.info(t("gps_phone_tips"))
-        st.session_state["near_me_gps_armed"] = False
 
     st.caption(t("gps_howto"))
     if st.button(
         t("get_precise_gps"), type="primary", use_container_width=True, key="near_me_gps_btn"
     ):
         st.session_state["near_me_gps_armed"] = True
-        # Clear previous fail flag so a new attempt can proceed
-        try:
-            if "gps_fail" in st.query_params:
-                del st.query_params["gps_fail"]
-        except Exception:
-            pass
+        st.rerun()
 
-    if st.session_state.get("near_me_gps_armed") and not fail_q:
-        components.html(
+    if st.session_state.get("near_me_gps_armed"):
+        gps_result = components.html(
             """
+            <script src="https://streamlit.io/vendor/streamlit-component-lib.js"></script>
             <div id="gps-status" style="font-family:sans-serif;font-size:14px;padding:8px 0;">
               %s
             </div>
@@ -997,6 +976,11 @@ def _read_device_gps():
               const msgWait = %s;
               const errPrefix = %s;
               const noGeo = %s;
+              
+              // Initialize Streamlit component
+              if (typeof Streamlit !== 'undefined') {
+                Streamlit.setFrameHeight(100);
+              }
               
               function fail(msg) {
                 if (status) status.textContent = msg;
@@ -1009,69 +993,39 @@ def _read_device_gps():
                        window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
               }
               
-              // Try to safely access parent window with fallback
-              function getParentWindow() {
-                try {
-                  // Test if we can access parent
-                  if (window.parent && window.parent !== window) {
-                    // Try to access parent location (will throw if cross-origin)
-                    var test = window.parent.location.href;
-                    return window.parent;
-                  }
-                } catch (e) {
-                  // Cross-origin restriction, use current window
-                  console.log("Cross-origin restriction, using current window");
-                }
-                return window;
-              }
-              
-              const parentWin = getParentWindow();
-              
-              function applyToParent(best, failed) {
-                try {
-                  const u = new URL(parentWin.location.href);
-                  if (failed) {
-                    u.searchParams.set("gps_fail", "coarse");
-                    u.searchParams.set("gps_acc", String(best ? best.accuracy : 9999));
-                    u.searchParams.delete("gps_lat");
-                    u.searchParams.delete("gps_lon");
-                  } else {
-                    u.searchParams.delete("gps_fail");
-                    u.searchParams.set("gps_lat", String(best.latitude));
-                    u.searchParams.set("gps_lon", String(best.longitude));
-                    u.searchParams.set("gps_acc", String(best.accuracy));
-                  }
-                  parentWin.location.href = u.toString();
-                } catch (e) {
-                  console.error("Failed to update URL:", e);
-                  fail("Security error: Unable to update location. Please refresh and try again.");
+              // Send GPS result back to Streamlit
+              function sendToStreamlit(best, failed) {
+                const result = {
+                  failed: failed,
+                  latitude: best ? best.latitude : null,
+                  longitude: best ? best.longitude : null,
+                  accuracy: best ? best.accuracy : null,
+                  timestamp: Date.now()
+                };
+                
+                console.log("Sending GPS result to Streamlit:", result);
+                
+                if (typeof Streamlit !== 'undefined') {
+                  Streamlit.setComponentValue(result);
+                } else {
+                  console.error("Streamlit API not available");
+                  fail("Unable to communicate with app. Please refresh the page.");
                 }
               }
               
               // Check secure context first
               if (!isSecureContext()) {
                 fail("⚠️ GPS requires HTTPS. Please access this app via https://");
+                sendToStreamlit(null, true);
                 return;
               }
               
-              // Get geolocation API from parent or current window
-              let geoHost = null;
-              try {
-                // Try parent window first for better accuracy
-                if (parentWin && parentWin.navigator && parentWin.navigator.geolocation) {
-                  geoHost = parentWin.navigator.geolocation;
-                }
-              } catch (e) {
-                console.log("Cannot access parent geolocation:", e);
-              }
-              
-              // Fallback to current window
-              if (!geoHost && navigator.geolocation) {
-                geoHost = navigator.geolocation;
-              }
+              // Get geolocation API
+              const geoHost = navigator.geolocation;
               
               if (!geoHost) {
                 fail(noGeo);
+                sendToStreamlit(null, true);
                 return;
               }
               
@@ -1094,6 +1048,11 @@ def _read_device_gps():
                 const emoji = acc <= 10 ? "🎯" : acc <= 20 ? "✓" : "📡";
                 status.textContent = emoji + " GPS ±" + acc + " m — " +
                   (acc <= 15 ? msgGood : msgWait) + " (samples: " + samples + ")";
+                
+                // Update frame height if status grows
+                if (typeof Streamlit !== 'undefined') {
+                  Streamlit.setFrameHeight(100);
+                }
               }
               
               // Success handler
@@ -1113,11 +1072,10 @@ def _read_device_gps():
                 }
                 
                 // Accept immediately if accuracy is excellent (≤15m)
-                // This matches GPS Map cam app precision
                 if (best.accuracy <= 15 && !accepted) {
                   accepted = true;
                   try { geoHost.clearWatch(watchId); } catch (e) {}
-                  applyToParent(best, false);
+                  sendToStreamlit(best, false);
                 }
               }
               
@@ -1130,6 +1088,7 @@ def _read_device_gps():
                 else if (err.code === 3) msg += "Timeout. Please try again in an area with better GPS signal.";
                 else msg += (err.message || String(err));
                 fail(msg);
+                sendToStreamlit(null, true);
               }
               
               // Start continuous GPS watch
@@ -1138,28 +1097,28 @@ def _read_device_gps():
               } catch (e) {
                 console.error("Failed to start GPS watch:", e);
                 fail(errPrefix + "Cannot access GPS. Please ensure Location is enabled and try again.");
+                sendToStreamlit(null, true);
                 return;
               }
               
               // Fallback timeout: after 45 seconds, accept best reading if reasonable
               setTimeout(function () {
-                if (accepted) return; // Already accepted
+                if (accepted) return;
                 try { geoHost.clearWatch(watchId); } catch (e) {}
                 
                 if (!best) {
                   fail(errPrefix + "No GPS signal received. Please check Location Services are enabled.");
-                  applyToParent(null, true);
+                  sendToStreamlit(null, true);
                   return;
                 }
                 
                 // Only accept if accuracy is decent (≤25m)
-                // Reject coarse network locations (>25m)
                 if (best.accuracy <= 25) {
                   accepted = true;
-                  applyToParent(best, false);
+                  sendToStreamlit(best, false);
                 } else {
                   fail("GPS accuracy too poor (±" + Math.round(best.accuracy) + "m). Please try outdoors with clear sky view.");
-                  applyToParent(best, true);
+                  sendToStreamlit(best, true);
                 }
               }, 45000);
             })();
@@ -1172,22 +1131,26 @@ def _read_device_gps():
                 json.dumps(t("gps_error_prefix"), ensure_ascii=False),
                 json.dumps(t("gps_no_geolocation"), ensure_ascii=False),
             ),
-            height=72,
+            height=100,
         )
-
-    if fail_q:
-        return None, None, None
-    if lat_q is None or lon_q is None:
-        return None, None, None
-    try:
-        lat = float(lat_q if not isinstance(lat_q, list) else lat_q[0])
-        lon = float(lon_q if not isinstance(lon_q, list) else lon_q[0])
-        acc = None
-        if acc_q is not None:
-            acc = float(acc_q if not isinstance(acc_q, list) else acc_q[0])
-        return lat, lon, acc
-    except (TypeError, ValueError):
-        return None, None, None
+        
+        # Handle GPS result from component
+        if gps_result and isinstance(gps_result, dict):
+            if not gps_result.get("failed") and gps_result.get("latitude") and gps_result.get("longitude"):
+                st.session_state["near_me_lat"] = gps_result["latitude"]
+                st.session_state["near_me_lon"] = gps_result["longitude"]
+                st.session_state["near_me_acc"] = gps_result.get("accuracy")
+                st.session_state["near_me_gps_armed"] = False
+                st.rerun()
+            elif gps_result.get("failed"):
+                st.session_state["near_me_gps_armed"] = False
+                # Error message already shown by component
+    
+    # Return stored GPS data from session state
+    lat = st.session_state.get("near_me_lat")
+    lon = st.session_state.get("near_me_lon")
+    accuracy = st.session_state.get("near_me_acc")
+    return lat, lon, accuracy
 
 
 def page_near_me() -> None:
@@ -1206,14 +1169,6 @@ def page_near_me() -> None:
         st.session_state.pop("near_me_lat", None)
         st.session_state.pop("near_me_lon", None)
         st.session_state.pop("near_me_acc", None)
-        try:
-            st.query_params.clear()
-        except Exception:
-            for key in ("gps_lat", "gps_lon", "gps_acc", "gps_fail"):
-                try:
-                    del st.query_params[key]
-                except Exception:
-                    pass
         st.rerun()
 
     if lat is not None and lon is not None:
