@@ -1000,11 +1000,36 @@ def _read_device_gps():
               
               function fail(msg) {
                 if (status) status.textContent = msg;
+                console.error("GPS Error:", msg);
               }
+              
+              // Check if we're in a secure context (HTTPS)
+              function isSecureContext() {
+                return window.isSecureContext || window.location.protocol === 'https:' || 
+                       window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+              }
+              
+              // Try to safely access parent window with fallback
+              function getParentWindow() {
+                try {
+                  // Test if we can access parent
+                  if (window.parent && window.parent !== window) {
+                    // Try to access parent location (will throw if cross-origin)
+                    var test = window.parent.location.href;
+                    return window.parent;
+                  }
+                } catch (e) {
+                  // Cross-origin restriction, use current window
+                  console.log("Cross-origin restriction, using current window");
+                }
+                return window;
+              }
+              
+              const parentWin = getParentWindow();
               
               function applyToParent(best, failed) {
                 try {
-                  const u = new URL(window.parent.location.href);
+                  const u = new URL(parentWin.location.href);
                   if (failed) {
                     u.searchParams.set("gps_fail", "coarse");
                     u.searchParams.set("gps_acc", String(best ? best.accuracy : 9999));
@@ -1016,17 +1041,34 @@ def _read_device_gps():
                     u.searchParams.set("gps_lon", String(best.longitude));
                     u.searchParams.set("gps_acc", String(best.accuracy));
                   }
-                  window.parent.location.href = u.toString();
+                  parentWin.location.href = u.toString();
                 } catch (e) {
-                  fail(String(e));
+                  console.error("Failed to update URL:", e);
+                  fail("Security error: Unable to update location. Please refresh and try again.");
                 }
               }
               
-              // Critical: use PARENT navigator — iframe geolocation is often coarse-only
-              const geoHost = (window.parent && window.parent.navigator &&
-                               window.parent.navigator.geolocation)
-                ? window.parent.navigator.geolocation
-                : navigator.geolocation;
+              // Check secure context first
+              if (!isSecureContext()) {
+                fail("⚠️ GPS requires HTTPS. Please access this app via https://");
+                return;
+              }
+              
+              // Get geolocation API from parent or current window
+              let geoHost = null;
+              try {
+                // Try parent window first for better accuracy
+                if (parentWin && parentWin.navigator && parentWin.navigator.geolocation) {
+                  geoHost = parentWin.navigator.geolocation;
+                }
+              } catch (e) {
+                console.log("Cannot access parent geolocation:", e);
+              }
+              
+              // Fallback to current window
+              if (!geoHost && navigator.geolocation) {
+                geoHost = navigator.geolocation;
+              }
               
               if (!geoHost) {
                 fail(noGeo);
@@ -1083,9 +1125,9 @@ def _read_device_gps():
               function onError(err) {
                 console.error("GPS Error:", err);
                 let msg = errPrefix;
-                if (err.code === 1) msg += "Permission denied";
-                else if (err.code === 2) msg += "Position unavailable";
-                else if (err.code === 3) msg += "Timeout";
+                if (err.code === 1) msg += "Permission denied. Please allow location access in browser settings.";
+                else if (err.code === 2) msg += "Position unavailable. Please check GPS/Location is enabled.";
+                else if (err.code === 3) msg += "Timeout. Please try again in an area with better GPS signal.";
                 else msg += (err.message || String(err));
                 fail(msg);
               }
@@ -1094,7 +1136,8 @@ def _read_device_gps():
               try {
                 watchId = geoHost.watchPosition(onPosition, onError, opts);
               } catch (e) {
-                fail(errPrefix + String(e));
+                console.error("Failed to start GPS watch:", e);
+                fail(errPrefix + "Cannot access GPS. Please ensure Location is enabled and try again.");
                 return;
               }
               
@@ -1104,7 +1147,7 @@ def _read_device_gps():
                 try { geoHost.clearWatch(watchId); } catch (e) {}
                 
                 if (!best) {
-                  fail(errPrefix + "No GPS signal received. Please check Location Services.");
+                  fail(errPrefix + "No GPS signal received. Please check Location Services are enabled.");
                   applyToParent(null, true);
                   return;
                 }
