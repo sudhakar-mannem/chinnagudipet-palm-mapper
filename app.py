@@ -1099,8 +1099,15 @@ def _read_device_gps():
                 if (!status || !best) return;
                 const acc = Math.round(best.accuracy);
                 const emoji = acc <= 10 ? "🎯" : acc <= 20 ? "✓" : "📡";
-                status.textContent = emoji + " GPS ±" + acc + " m — " +
-                  (acc <= 15 ? msgGood : msgWait) + " (samples: " + samples + ")";
+                let msg = emoji + " GPS ±" + acc + " m";
+                
+                if (acc <= 20) {
+                  msg += " — " + msgGood + ", వర్తింపజేస్తోంది...";  // Applying...
+                } else {
+                  msg += " — " + msgWait;
+                }
+                msg += " (samples: " + samples + ")";
+                status.textContent = msg;
               }
               
               // Success handler
@@ -1119,9 +1126,10 @@ def _read_device_gps():
                   updateStatus();
                 }
                 
-                // Accept immediately if accuracy is excellent (≤15m)
-                if (best.accuracy <= 15 && !accepted) {
+                // Accept immediately if accuracy is good (≤20m) - practical for field use
+                if (best.accuracy <= 20 && !accepted) {
                   accepted = true;
+                  status.textContent = "✅ స్థానం పొందబడింది, రీలోడ్ చేస్తోంది...";
                   try { geoHost.clearWatch(watchId); } catch (e) {}
                   saveAndReload(best, false);
                 }
@@ -1148,7 +1156,7 @@ def _read_device_gps():
                 return;
               }
               
-              // Fallback timeout: after 45 seconds, accept best reading if reasonable
+              // Fallback timeout: after 30 seconds, accept best reading if reasonable
               setTimeout(function () {
                 if (accepted) return;
                 try { geoHost.clearWatch(watchId); } catch (e) {}
@@ -1162,12 +1170,13 @@ def _read_device_gps():
                 // Only accept if accuracy is decent (≤25m)
                 if (best.accuracy <= 25) {
                   accepted = true;
+                  status.textContent = "✅ స్థానం పొందబడింది (±" + Math.round(best.accuracy) + "m), రీలోడ్ చేస్తోంది...";
                   saveAndReload(best, false);
                 } else {
                   fail("GPS accuracy too poor (±" + Math.round(best.accuracy) + "m). Please try outdoors with clear sky view.");
                   saveAndReload(best, true);
                 }
-              }, 45000);
+              }, 30000);
             })();
             </script>
             """
