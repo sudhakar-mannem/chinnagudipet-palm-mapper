@@ -951,21 +951,79 @@ def _read_device_gps():
     """
     High-accuracy browser GPS for mobile Near me.
     
-    Uses Streamlit component API for secure communication.
+    Uses localStorage as a bridge between GPS component and Python app.
     """
     import streamlit.components.v1 as components
+
+    # First, check if GPS data is available in localStorage
+    if not st.session_state.get("near_me_gps_armed"):
+        # Try to read GPS data from localStorage
+        gps_reader = components.html(
+            """
+            <script>
+            (function() {
+                const gpsData = localStorage.getItem('streamlit_gps_data');
+                if (gpsData) {
+                    // Found GPS data, clear it and pass to parent
+                    localStorage.removeItem('streamlit_gps_data');
+                    const data = JSON.parse(gpsData);
+                    
+                    // Try to update parent URL
+                    try {
+                        const u = new URL(window.location.href);
+                        if (data.failed) {
+                            u.searchParams.set("gps_fail", "1");
+                            u.searchParams.set("gps_acc", data.accuracy || "9999");
+                        } else {
+                            u.searchParams.delete("gps_fail");
+                            u.searchParams.set("gps_lat", data.latitude);
+                            u.searchParams.set("gps_lon", data.longitude);
+                            u.searchParams.set("gps_acc", data.accuracy);
+                        }
+                        window.location.href = u.toString();
+                    } catch (e) {
+                        console.error("Could not update URL:", e);
+                    }
+                }
+            })();
+            </script>
+            """,
+            height=0,
+        )
+    
+    # Check query params for GPS data
+    params = st.query_params
+    fail_q = params.get("gps_fail")
+    lat_q = params.get("gps_lat")
+    lon_q = params.get("gps_lon")
+    acc_q = params.get("gps_acc")
+    
+    if fail_q:
+        try:
+            acc_fail = float(acc_q if not isinstance(acc_q, list) else acc_q[0]) if acc_q else 0.0
+        except (TypeError, ValueError):
+            acc_fail = 0.0
+        st.error(f"GPS failed with accuracy: ±{acc_fail}m")
+        st.info("Please try outdoors with clear sky view for better GPS accuracy.")
+        st.session_state["near_me_gps_armed"] = False
 
     st.caption(t("gps_howto"))
     if st.button(
         t("get_precise_gps"), type="primary", use_container_width=True, key="near_me_gps_btn"
     ):
         st.session_state["near_me_gps_armed"] = True
+        # Clear previous GPS data
+        try:
+            for key in ("gps_fail", "gps_lat", "gps_lon", "gps_acc"):
+                if key in st.query_params:
+                    del st.query_params[key]
+        except Exception:
+            pass
         st.rerun()
 
-    if st.session_state.get("near_me_gps_armed"):
-        gps_result = components.html(
+    if st.session_state.get("near_me_gps_armed") and not fail_q:
+        components.html(
             """
-            <script src="https://streamlit.io/vendor/streamlit-component-lib.js"></script>
             <div id="gps-status" style="font-family:sans-serif;font-size:14px;padding:8px 0;">
               %s
             </div>
@@ -976,11 +1034,6 @@ def _read_device_gps():
               const msgWait = %s;
               const errPrefix = %s;
               const noGeo = %s;
-              
-              // Initialize Streamlit component
-              if (typeof Streamlit !== 'undefined') {
-                Streamlit.setFrameHeight(100);
-              }
               
               function fail(msg) {
                 if (status) status.textContent = msg;
@@ -993,8 +1046,8 @@ def _read_device_gps():
                        window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
               }
               
-              // Send GPS result back to Streamlit
-              function sendToStreamlit(best, failed) {
+              // Save GPS result to localStorage and trigger reload
+              function saveAndReload(best, failed) {
                 const result = {
                   failed: failed,
                   latitude: best ? best.latitude : null,
@@ -1003,20 +1056,21 @@ def _read_device_gps():
                   timestamp: Date.now()
                 };
                 
-                console.log("Sending GPS result to Streamlit:", result);
+                console.log("Saving GPS result to localStorage:", result);
                 
-                if (typeof Streamlit !== 'undefined') {
-                  Streamlit.setComponentValue(result);
-                } else {
-                  console.error("Streamlit API not available");
-                  fail("Unable to communicate with app. Please refresh the page.");
+                try {
+                  localStorage.setItem('streamlit_gps_data', JSON.stringify(result));
+                  // Trigger page reload to pick up the data
+                  window.location.reload();
+                } catch (e) {
+                  console.error("Failed to save GPS data:", e);
+                  fail("Unable to save GPS data. Please try again.");
                 }
               }
               
               // Check secure context first
               if (!isSecureContext()) {
                 fail("⚠️ GPS requires HTTPS. Please access this app via https://");
-                sendToStreamlit(null, true);
                 return;
               }
               
@@ -1025,7 +1079,6 @@ def _read_device_gps():
               
               if (!geoHost) {
                 fail(noGeo);
-                sendToStreamlit(null, true);
                 return;
               }
               
@@ -1048,11 +1101,6 @@ def _read_device_gps():
                 const emoji = acc <= 10 ? "🎯" : acc <= 20 ? "✓" : "📡";
                 status.textContent = emoji + " GPS ±" + acc + " m — " +
                   (acc <= 15 ? msgGood : msgWait) + " (samples: " + samples + ")";
-                
-                // Update frame height if status grows
-                if (typeof Streamlit !== 'undefined') {
-                  Streamlit.setFrameHeight(100);
-                }
               }
               
               // Success handler
@@ -1075,7 +1123,7 @@ def _read_device_gps():
                 if (best.accuracy <= 15 && !accepted) {
                   accepted = true;
                   try { geoHost.clearWatch(watchId); } catch (e) {}
-                  sendToStreamlit(best, false);
+                  saveAndReload(best, false);
                 }
               }
               
@@ -1088,7 +1136,7 @@ def _read_device_gps():
                 else if (err.code === 3) msg += "Timeout. Please try again in an area with better GPS signal.";
                 else msg += (err.message || String(err));
                 fail(msg);
-                sendToStreamlit(null, true);
+                saveAndReload(null, true);
               }
               
               // Start continuous GPS watch
@@ -1097,7 +1145,6 @@ def _read_device_gps():
               } catch (e) {
                 console.error("Failed to start GPS watch:", e);
                 fail(errPrefix + "Cannot access GPS. Please ensure Location is enabled and try again.");
-                sendToStreamlit(null, true);
                 return;
               }
               
@@ -1108,17 +1155,17 @@ def _read_device_gps():
                 
                 if (!best) {
                   fail(errPrefix + "No GPS signal received. Please check Location Services are enabled.");
-                  sendToStreamlit(null, true);
+                  saveAndReload(null, true);
                   return;
                 }
                 
                 // Only accept if accuracy is decent (≤25m)
                 if (best.accuracy <= 25) {
                   accepted = true;
-                  sendToStreamlit(best, false);
+                  saveAndReload(best, false);
                 } else {
                   fail("GPS accuracy too poor (±" + Math.round(best.accuracy) + "m). Please try outdoors with clear sky view.");
-                  sendToStreamlit(best, true);
+                  saveAndReload(best, true);
                 }
               }, 45000);
             })();
@@ -1133,28 +1180,28 @@ def _read_device_gps():
             ),
             height=100,
         )
-        
-        # Handle GPS result from component
-        if gps_result and isinstance(gps_result, dict):
-            if not gps_result.get("failed") and gps_result.get("latitude") and gps_result.get("longitude"):
-                st.session_state["near_me_lat"] = gps_result["latitude"]
-                st.session_state["near_me_lon"] = gps_result["longitude"]
-                st.session_state["near_me_acc"] = gps_result.get("accuracy")
-                st.session_state["near_me_gps_armed"] = False
-                st.rerun()
-            elif gps_result.get("failed"):
-                st.session_state["near_me_gps_armed"] = False
-                # Error message already shown by component
     
-    # Return stored GPS data from session state
-    lat = st.session_state.get("near_me_lat")
-    lon = st.session_state.get("near_me_lon")
-    accuracy = st.session_state.get("near_me_acc")
-    return lat, lon, accuracy
+    # Return GPS data from query params
+    if fail_q:
+        return None, None, None
+    if lat_q and lon_q:
+        try:
+            lat = float(lat_q if not isinstance(lat_q, list) else lat_q[0])
+            lon = float(lon_q if not isinstance(lon_q, list) else lon_q[0])
+            acc = None
+            if acc_q:
+                acc = float(acc_q if not isinstance(acc_q, list) else acc_q[0])
+            return lat, lon, acc
+        except (TypeError, ValueError):
+            return None, None, None
+    
+    return None, None, None
 
 
 def page_near_me() -> None:
     """Mobile-first: GPS → nearest map plant number within NEAR_PLANT_RADIUS_M."""
+    import streamlit.components.v1 as components
+    
     st.title(t("near_me_title"))
     st.caption(t("near_me_caption"))
 
@@ -1166,9 +1213,18 @@ def page_near_me() -> None:
     lat, lon, accuracy = _read_device_gps()
     if st.button(t("clear_gps"), use_container_width=True, key="near_me_clear"):
         st.session_state.pop("near_me_gps_armed", None)
-        st.session_state.pop("near_me_lat", None)
-        st.session_state.pop("near_me_lon", None)
-        st.session_state.pop("near_me_acc", None)
+        # Clear query params
+        try:
+            for key in ("gps_fail", "gps_lat", "gps_lon", "gps_acc"):
+                if key in st.query_params:
+                    del st.query_params[key]
+        except Exception:
+            pass
+        # Clear localStorage via component
+        components.html(
+            "<script>localStorage.removeItem('streamlit_gps_data');</script>",
+            height=0,
+        )
         st.rerun()
 
     if lat is not None and lon is not None:
