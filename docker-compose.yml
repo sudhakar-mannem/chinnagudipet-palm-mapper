@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  palm-mapper:
+    build: .
+    container_name: palm-mapper
+    ports:
+      - "8501:8501"
+    volumes:
+      # Persist data outside container
+      - ./data:/data
+      # Mount credentials (optional)
+      - ./credentials:/app/credentials:ro
+    environment:
+      # Configure secrets via environment variables or .env file
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_DRIVE_FOLDER_ID=${GOOGLE_DRIVE_FOLDER_ID}
+      - PALM_CACHE_DIR=/data/cache
+      - PALM_OUTPUT_DIR=/data/output
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
