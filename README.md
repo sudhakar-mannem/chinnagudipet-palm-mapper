@@ -1,8 +1,12 @@
 # Palm Plant Health Mapper
 
-Sync oil palm field photos from Google Drive, use AI to score each plant, and export a color-coded Google Earth map. Click any plant icon to see the latest photo.
+Comprehensive oil palm farm management system with:
+- **Plant Health Monitoring** - AI-powered health assessment from photos
+- **Worker GPS Tracking** - Automatic route tracking with geofencing 🆕
 
-## What it does
+## Features
+
+### 🌴 Plant Health Mapping
 
 1. **Reads photos** from your Drive folder:  
    [`1_ZkYcDg4zu42RKNN5o4ChipG7Wlz43Gs`](https://drive.google.com/drive/folders/1_ZkYcDg4zu42RKNN5o4ChipG7Wlz43Gs)
@@ -16,6 +20,23 @@ Sync oil palm field photos from Google Drive, use AI to score each plant, and ex
 5. **Shows an in-app map** where you can click markers to preview the latest photo.
 
 When multiple photos exist for the same plant location, only the **newest** photo is mapped.
+
+### 👷 Worker GPS Tracking (New!)
+
+A continuous GPS tracking system designed specifically for farm workers:
+
+- **Automatic geofencing** - Auto-detect farm entry/exit (no manual check-in needed)
+- **Route history** - Complete GPS trail throughout the workday
+- **Stop/idle detection** - Identify where workers spent time (e.g., 45 min at one location)
+- **Daily summaries** - First entry, last exit, time in farm, distance covered
+- **Historical playback** - View any worker's route for any past date
+- **Plant coverage overlay** - See which plant zones were visited
+- **Offline support** - GPS recorded locally, sync later (works without mobile data)
+- **Battery monitoring** - Alerts when GPS tracking stops
+
+**Perfect for permanent farm workers** - No attendance app needed, just continuous background tracking during work hours.
+
+See **[WORKER_TRACKING_GUIDE.md](WORKER_TRACKING_GUIDE.md)** for complete documentation.
 
 ## One-time setup
 
