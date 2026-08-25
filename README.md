@@ -100,19 +100,40 @@ See **[SECRETS_SETUP_GUIDE.md](SECRETS_SETUP_GUIDE.md)** if secrets aren't worki
 
 ## Deploy on Streamlit Community Cloud
 
-Follow the [official get-started / deploy docs](https://docs.streamlit.io/deploy/streamlit-community-cloud/get-started).
+**📖 Complete Setup Guide:** See **[STREAMLIT_CLOUD_FIX.md](STREAMLIT_CLOUD_FIX.md)** (English) or **[STREAMLIT_CLOUD_SETUP_TELUGU.md](STREAMLIT_CLOUD_SETUP_TELUGU.md)** (తెలుగు)
 
-1. Push this repo to GitHub (already done for `chinnagudipet-palm-mapper`).
-2. Open [share.streamlit.io](https://share.streamlit.io/) → **Create app** → **Yup, I have an app**.
-3. Set:
-   - Repository: `sudhakar-mannem/chinnagudipet-palm-mapper`
-   - Branch: `main`
-   - Main file: `app.py`
-   - Python version: **3.12** (Advanced settings)
-4. In **Advanced settings → Secrets**, paste values from `.streamlit/secrets.toml.example` (with your real keys). For Drive on Cloud, also set multiline `GOOGLE_CREDENTIALS_JSON` and `GOOGLE_TOKEN_JSON` from your local `credentials/` files after running `python auth_drive.py` once.
-5. Click **Deploy**.
+**Quick steps:**
 
-Map view works once analysis state exists on the server (run **Plant Mapping** after secrets are set, or sync from CLI locally and upload state separately).
+1. **Authenticate with Google Drive locally:**
+   ```bash
+   python auth_drive.py  # Opens browser for Google OAuth
+   ```
+
+2. **Generate base64 secrets for Cloud:**
+   ```bash
+   python make_cloud_secrets.py
+   ```
+   Copy the output (GOOGLE_CREDENTIALS_B64 and GOOGLE_TOKEN_B64)
+
+3. **Deploy to Streamlit Cloud:**
+   - Open [share.streamlit.io](https://share.streamlit.io/)
+   - Create app from `sudhakar-mannem/chinnagudipet-palm-mapper`
+   - Main file: `app.py`, Python: 3.12
+
+4. **Configure Secrets** (Settings → Secrets):
+   ```toml
+   OPENAI_API_KEY = "sk-your-key-here"
+   OPENAI_VISION_MODEL = "gpt-4o"
+   GOOGLE_DRIVE_FOLDER_ID = "1_ZkYcDg4zu42RKNN5o4ChipG7Wlz43Gs"
+   GOOGLE_CREDENTIALS_B64 = "eyJpbnN0YWxsZWQiOnt..."  # from make_cloud_secrets.py
+   GOOGLE_TOKEN_B64 = "eyJ0b2tlbiI6InlhMjku..."      # from make_cloud_secrets.py
+   ```
+
+5. **Save & Deploy**
+
+**Note:** Use base64-encoded credentials (`*_B64`) instead of raw JSON to avoid TOML validation errors.
+
+**Troubleshooting:** If images don't load, see the detailed guides above.
 
 ## Project layout
 
