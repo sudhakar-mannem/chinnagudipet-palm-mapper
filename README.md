@@ -85,6 +85,19 @@ python cli.py --force-download
 | Red | Critical / diseased |
 | White | Unknown / AI could not determine |
 
+## Deploy on Cursor Cloud Agents
+
+To run this application in Cursor Cloud Agents, see **[Cloud Agent Setup Guide](.github/CLOUD_AGENT_SETUP.md)**.
+
+**Quick start:**
+1. Configure secrets in [Cursor Dashboard](https://cursor.com/dashboard/cloud-agents/secrets)
+2. Enable secret injection for this public repository
+3. Start a new Cloud Agent
+4. Run `python3 test_secrets.py` to verify setup
+5. Run `python3 cli.py` or `streamlit run app.py`
+
+See **[SECRETS_SETUP_GUIDE.md](SECRETS_SETUP_GUIDE.md)** if secrets aren't working.
+
 ## Deploy on Streamlit Community Cloud
 
 Follow the [official get-started / deploy docs](https://docs.streamlit.io/deploy/streamlit-community-cloud/get-started).
