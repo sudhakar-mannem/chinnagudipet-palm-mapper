@@ -67,9 +67,9 @@ Output Dir:  {config.OUTPUT_DIR}
         else:
             with st.spinner("Testing Drive connection..."):
                 try:
-                    from services.drive import build_drive_service
+                    from services.drive import get_drive_service
                     
-                    service = build_drive_service()
+                    service = get_drive_service(interactive=False)
                     
                     # Test by listing folders
                     results = service.files().list(
