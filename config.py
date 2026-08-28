@@ -332,13 +332,22 @@ def _seed_bundled_state() -> None:
     if not bundled.exists():
         return
 
+    bundled_count = 0
+    try:
+        bundled_count = len(
+            (json.loads(bundled.read_text(encoding="utf-8")).get("observations") or [])
+        )
+    except Exception:
+        bundled_count = 0
+
     needs_seed = True
     if STATE_PATH.exists():
         try:
             existing = json.loads(STATE_PATH.read_text(encoding="utf-8"))
             obs = existing.get("observations") or []
-            # Keep richer local/cloud state; only replace empty shells
-            if len(obs) >= 10:
+            # Keep richer local/cloud state; replace empty shells or stale seeds
+            # when the repo bundle has more observations (e.g. after a new day).
+            if len(obs) >= 10 and len(obs) >= bundled_count:
                 needs_seed = False
         except Exception:
             needs_seed = True
@@ -356,7 +365,14 @@ def _seed_bundled_state() -> None:
     for name in ("palm_health_consolidated.kml", "palm_health_consolidated.json"):
         src = exports / name
         dest = OUTPUT_DIR / name
-        if src.exists() and (not dest.exists() or dest.stat().st_size < 1000):
+        if not src.exists():
+            continue
+        replace = (
+            not dest.exists()
+            or dest.stat().st_size < 1000
+            or (needs_seed and src.stat().st_size > dest.stat().st_size)
+        )
+        if replace:
             try:
                 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(src.read_bytes())
