@@ -1003,8 +1003,8 @@ def _read_device_gps():
             acc_fail = float(acc_q if not isinstance(acc_q, list) else acc_q[0]) if acc_q else 0.0
         except (TypeError, ValueError):
             acc_fail = 0.0
-        st.error(f"GPS failed with accuracy: ±{acc_fail}m")
-        st.info("Please try outdoors with clear sky view for better GPS accuracy.")
+        st.error(t("gps_coarse_fail", acc_fail))
+        st.info(t("gps_phone_tips"))
         st.session_state["near_me_gps_armed"] = False
 
     st.caption(t("gps_howto"))
@@ -1101,7 +1101,7 @@ def _read_device_gps():
                 const emoji = acc <= 10 ? "🎯" : acc <= 20 ? "✓" : "📡";
                 let msg = emoji + " GPS ±" + acc + " m";
                 
-                if (acc <= 20) {
+                if (acc <= 40) {
                   msg += " — " + msgGood + ", వర్తింపజేస్తోంది...";  // Applying...
                 } else {
                   msg += " — " + msgWait;
@@ -1126,8 +1126,8 @@ def _read_device_gps():
                   updateStatus();
                 }
                 
-                // Accept immediately if accuracy is good (≤20m) - practical for field use
-                if (best.accuracy <= 20 && !accepted) {
+                // Accept when accuracy is usable for optional plant ID (≤40m)
+                if (best.accuracy <= 40 && !accepted) {
                   accepted = true;
                   status.textContent = "✅ స్థానం పొందబడింది, రీలోడ్ చేస్తోంది...";
                   try { geoHost.clearWatch(watchId); } catch (e) {}
@@ -1167,8 +1167,8 @@ def _read_device_gps():
                   return;
                 }
                 
-                // Only accept if accuracy is decent (≤25m)
-                if (best.accuracy <= 25) {
+                // Accept if ≤40 m; coarser fixes are rejected (phones often ±300–2000 m)
+                if (best.accuracy <= 40) {
                   accepted = true;
                   status.textContent = "✅ స్థానం పొందబడింది (±" + Math.round(best.accuracy) + "m), రీలోడ్ చేస్తోంది...";
                   saveAndReload(best, false);
@@ -1207,10 +1207,61 @@ def _read_device_gps():
     return None, None, None
 
 
+def _render_big_plant_number(
+    plant_n: int,
+    cluster: PlantCluster,
+    dist_m: Optional[float] = None,
+    source_note: str = "",
+) -> None:
+    p = cluster.representative
+    health = p.health if p.health in HEALTH_COLORS else "white"
+    color = HEALTH_COLORS[health]["hex"]
+    label = HEALTH_COLORS[health]["label"]
+    title = p.plant_id or Path(p.file_name).stem
+    if dist_m is not None:
+        dist_line = (
+            '<div style="margin-top:0.85rem;font-size:1.15rem;">%s</div>'
+            % html.escape(t("m_away_health", dist_m, label))
+        )
+    else:
+        dist_line = (
+            '<div style="margin-top:0.85rem;font-size:1.15rem;">%s</div>'
+            % html.escape(label)
+        )
+    source_line = ""
+    if source_note:
+        source_line = (
+            '<div style="margin-top:0.25rem;font-size:0.9rem;opacity:0.7;">%s</div>'
+            % html.escape(source_note)
+        )
+    st.markdown(
+        '<div style="text-align:center;padding:1.2rem 0 0.4rem 0;">'
+        '<div style="font-size:0.95rem;opacity:0.75;margin-bottom:0.35rem;">%s</div>'
+        '<div style="font-size:min(28vw,7.5rem);font-weight:800;line-height:1;'
+        "letter-spacing:-0.04em;color:%s;text-shadow:0 1px 0 rgba(0,0,0,0.15);\">"
+        "%d</div>"
+        "%s"
+        '<div style="margin-top:0.35rem;font-size:0.95rem;opacity:0.8;">%s</div>'
+        "%s"
+        "</div>"
+        % (
+            html.escape(t("plant_word")),
+            color,
+            plant_n,
+            dist_line,
+            html.escape(title),
+            source_line,
+        ),
+        unsafe_allow_html=True,
+    )
+    st.session_state["selected_cluster_idx"] = max(0, plant_n - 1)
+    st.session_state["plant_select_main"] = max(0, plant_n - 1)
+    st.caption(t("open_map_for_photos"))
+
+
+
 def page_near_me() -> None:
-    """Mobile-first: GPS → nearest map plant number within NEAR_PLANT_RADIUS_M."""
-    import streamlit.components.v1 as components
-    
+    """Map tap + plant number first; GPS optional only when precise and near farm."""
     st.title(t("near_me_title"))
     st.caption(t("near_me_caption"))
 
@@ -1219,168 +1270,198 @@ def page_near_me() -> None:
         st.info(t("near_me_no_plants"))
         return
 
-    lat, lon, accuracy = _read_device_gps()
-    if st.button(t("clear_gps"), use_container_width=True, key="near_me_clear"):
-        st.session_state.pop("near_me_gps_armed", None)
-        # Clear query params
-        try:
-            for key in ("gps_fail", "gps_lat", "gps_lon", "gps_acc"):
-                if key in st.query_params:
-                    del st.query_params[key]
-        except Exception:
-            pass
-        # Clear localStorage via component
-        components.html(
-            "<script>localStorage.removeItem('streamlit_gps_data');</script>",
-            height=0,
+    n_plants = len(mapped)
+    selected_n = st.session_state.get("near_me_selected_n")
+    selected_source = st.session_state.get("near_me_selected_source")
+    selected_dist = st.session_state.get("near_me_selected_dist")
+
+    # --- Primary: farm map tap ---
+    st.subheader(t("farm_map"))
+    st.caption(t("near_me_map_help"))
+    fmap = build_map(mapped)
+    if fmap:
+        map_state = st_folium(
+            fmap,
+            height=420,
+            width=None,
+            use_container_width=True,
+            returned_objects=["last_object_clicked"],
+            key="near_me_map",
         )
-        st.rerun()
+        clicked = (map_state or {}).get("last_object_clicked")
+        if clicked and clicked.get("lat") is not None:
+            sig = (
+                round(float(clicked["lat"]), 6),
+                round(float(clicked["lng"]), 6),
+            )
+            if st.session_state.get("_near_me_click_sig") != sig:
+                hit = nearest_mapped_plant(
+                    mapped, float(clicked["lat"]), float(clicked["lng"])
+                )
+                if hit is not None:
+                    plant_n, _cluster, dist_m = hit
+                    st.session_state["_near_me_click_sig"] = sig
+                    st.session_state["near_me_selected_n"] = plant_n
+                    st.session_state["near_me_selected_source"] = "map"
+                    st.session_state["near_me_selected_dist"] = dist_m
+                    st.rerun()
 
-    if lat is not None and lon is not None:
-        st.session_state["near_me_lat"] = lat
-        st.session_state["near_me_lon"] = lon
-        st.session_state["near_me_acc"] = accuracy
-        st.session_state["near_me_gps_armed"] = False
-    else:
-        lat = st.session_state.get("near_me_lat")
-        lon = st.session_state.get("near_me_lon")
-        accuracy = st.session_state.get("near_me_acc")
-
-    if lat is None or lon is None:
-        st.info(t("waiting_gps"))
-        return
-
-    acc_m = None
-    try:
-        if accuracy is not None:
-            acc_m = float(accuracy)
-    except (TypeError, ValueError):
-        acc_m = None
-
-    acc_txt = t("acc_suffix", acc_m) if acc_m is not None else ""
-    
-    # Visual GPS accuracy indicator
-    if acc_m is not None:
-        if acc_m <= 15:
-            acc_emoji = "🎯"
-            acc_quality = "Excellent"
-            acc_color = "green"
-        elif acc_m <= 25:
-            acc_emoji = "✓"
-            acc_quality = "Good"
-            acc_color = "blue"
-        elif acc_m <= 50:
-            acc_emoji = "📡"
-            acc_quality = "Fair"
-            acc_color = "orange"
+    # --- Primary: type plant number ---
+    with st.form("near_me_number_form", clear_on_submit=False):
+        num = st.number_input(
+            t("enter_plant_number"),
+            min_value=1,
+            max_value=max(1, n_plants),
+            value=int(selected_n) if selected_n else 1,
+            step=1,
+            key="near_me_number_input",
+        )
+        submitted = st.form_submit_button(
+            t("show_plant"), type="primary", use_container_width=True
+        )
+    if submitted:
+        plant_n = int(num)
+        if 1 <= plant_n <= n_plants:
+            st.session_state["near_me_selected_n"] = plant_n
+            st.session_state["near_me_selected_source"] = "number"
+            st.session_state["near_me_selected_dist"] = None
+            selected_n = plant_n
+            selected_source = "number"
+            selected_dist = None
         else:
-            acc_emoji = "⚠️"
-            acc_quality = "Poor"
-            acc_color = "red"
-        
-        st.markdown(
-            f'<div style="text-align:center;padding:0.5rem;background:rgba(0,0,0,0.03);border-radius:8px;margin-bottom:1rem;">'
-            f'<span style="font-size:1.5rem;">{acc_emoji}</span> '
-            f'<span style="color:{acc_color};font-weight:600;">{acc_quality}</span> GPS accuracy: '
-            f'<strong>±{acc_m:.0f}m</strong><br/>'
-            f'<small style="opacity:0.7;">📍 {lat:.6f}, {lon:.6f}</small>'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-    else:
-        st.caption(t("your_location", lat, lon, acc_txt))
+            st.error(t("invalid_plant_number", n_plants))
 
-    farm = _plantation_median_lat_lon(mapped)
-    if farm is not None:
-        farm_dist = haversine_m(float(lat), float(lon), farm[0], farm[1])
-        if farm_dist > 500:
-            st.error(t("gps_far_from_farm", farm_dist))
-            return
-
-    if acc_m is not None and acc_m > 40:
-        st.warning(t("gps_accuracy_poor", acc_m))
-        with st.expander("📡 How to improve GPS accuracy", expanded=True):
-            st.markdown("""
-            **Your GPS accuracy is poor (±{:.0f}m). For better results:**
-            
-            🌤️ **Move to open sky** - Step away from buildings, trees, and roofs
-            
-            ⏱️ **Wait 30-60 seconds** - GPS needs time to lock onto satellites
-            
-            📱 **Check Location Settings:**
-            - Ensure "High Accuracy" or "GPS Only" mode is enabled
-            - Disable "Wi-Fi" or "Network" location (use GPS hardware)
-            - Allow location permission for your browser
-            
-            🔋 **Enable airplane mode** - Then re-enable just mobile data (forces GPS)
-            
-            📍 **Try GPS Test apps** - Apps like "GPS Status" can show satellite lock
-            
-            ❌ **Avoid indoor use** - GPS rarely works indoors
-            
-            *GPS Map cam apps work better because they wait for true GPS satellite lock, not network location.*
-            """.format(acc_m))
-    elif acc_m is not None and acc_m > 20:
-        st.info(f"📡 GPS accuracy: ±{acc_m:.0f}m. For better precision, move to open sky and wait longer.")
-
-    # Effective match radius: at least 2 m, but widen slightly to GPS uncertainty (capped)
-    match_r = float(NEAR_PLANT_RADIUS_M)
-    if acc_m is not None and acc_m > match_r:
-        match_r = min(max(acc_m, NEAR_PLANT_RADIUS_M), 25.0)
-
-    hit = nearest_mapped_plant(mapped, float(lat), float(lon))
-    if hit is None:
-        st.warning(t("could_not_match"))
-        return
-
-    plant_n, cluster, dist_m = hit
-    p = cluster.representative
-    health = p.health if p.health in HEALTH_COLORS else "white"
-    color = HEALTH_COLORS[health]["hex"]
-    label = HEALTH_COLORS[health]["label"]
-    title = p.plant_id or Path(p.file_name).stem
-
-    if dist_m <= match_r:
-        st.markdown(
-            '<div style="text-align:center;padding:1.2rem 0 0.4rem 0;">'
-            '<div style="font-size:0.95rem;opacity:0.75;margin-bottom:0.35rem;">%s</div>'
-            '<div style="font-size:min(28vw,7.5rem);font-weight:800;line-height:1;'
-            "letter-spacing:-0.04em;color:%s;text-shadow:0 1px 0 rgba(0,0,0,0.15);\">"
-            "%d</div>"
-            '<div style="margin-top:0.85rem;font-size:1.15rem;">%s</div>'
-            '<div style="margin-top:0.35rem;font-size:0.95rem;opacity:0.8;">%s</div>'
-            "</div>"
-            % (
-                html.escape(t("plant_word")),
-                color,
+    # --- Big plant number (primary result; above optional GPS) ---
+    selected_n = st.session_state.get("near_me_selected_n")
+    selected_source = st.session_state.get("near_me_selected_source")
+    selected_dist = st.session_state.get("near_me_selected_dist")
+    if selected_n is not None:
+        plant_n = int(selected_n)
+        if 1 <= plant_n <= n_plants:
+            cluster = mapped[plant_n - 1]
+            source_note = ""
+            if selected_source == "map":
+                source_note = t("selected_via_map")
+            elif selected_source == "number":
+                source_note = t("selected_via_number")
+            elif selected_source == "gps":
+                source_note = t("selected_via_gps")
+            _render_big_plant_number(
                 plant_n,
-                html.escape(t("m_away_health", dist_m, label)),
-                html.escape(title),
-            ),
-            unsafe_allow_html=True,
-        )
-        if match_r > NEAR_PLANT_RADIUS_M:
-            st.caption(t("matched_uncertainty", acc_m or match_r))
-        st.session_state["selected_cluster_idx"] = max(0, plant_n - 1)
-        st.session_state["plant_select_main"] = max(0, plant_n - 1)
-        st.caption(t("open_map_for_photos"))
-    else:
-        st.markdown(
-            '<div style="text-align:center;padding:1.5rem 0 0.5rem 0;">'
-            '<div style="font-size:clamp(1.6rem,7vw,2.4rem);font-weight:700;line-height:1.2;">'
-            "%s</div>"
-            "</div>"
-            % html.escape(t("no_plant_within", match_r)),
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div style="text-align:center;opacity:0.85;">'
-            "%s"
-            "</div>"
-            % t("nearest_plant", plant_n, dist_m, html.escape(label)),
-            unsafe_allow_html=True,
-        )
+                cluster,
+                dist_m=float(selected_dist) if selected_dist is not None else None,
+                source_note=source_note,
+            )
 
+    # --- Optional/demoted GPS ---
+    GPS_MAX_ACC_M = 40.0
+    GPS_MAX_FARM_DIST_M = 400.0
+
+    with st.expander(t("gps_optional"), expanded=False):
+        lat, lon, accuracy = _read_device_gps()
+        if st.button(t("clear_gps"), use_container_width=True, key="near_me_clear"):
+            st.session_state.pop("near_me_gps_armed", None)
+            st.session_state.pop("near_me_lat", None)
+            st.session_state.pop("near_me_lon", None)
+            st.session_state.pop("near_me_acc", None)
+            if st.session_state.get("near_me_selected_source") == "gps":
+                st.session_state.pop("near_me_selected_n", None)
+                st.session_state.pop("near_me_selected_source", None)
+                st.session_state.pop("near_me_selected_dist", None)
+            try:
+                for key in ("gps_lat", "gps_lon", "gps_acc", "gps_fail"):
+                    if key in st.query_params:
+                        del st.query_params[key]
+            except Exception:
+                pass
+            import streamlit.components.v1 as components
+
+            components.html(
+                "<script>try{localStorage.removeItem('streamlit_gps_data');}catch(e){}</script>",
+                height=0,
+            )
+            st.rerun()
+
+        if lat is not None and lon is not None:
+            st.session_state["near_me_lat"] = lat
+            st.session_state["near_me_lon"] = lon
+            st.session_state["near_me_acc"] = accuracy
+            st.session_state["near_me_gps_armed"] = False
+        else:
+            lat = st.session_state.get("near_me_lat")
+            lon = st.session_state.get("near_me_lon")
+            accuracy = st.session_state.get("near_me_acc")
+
+        if lat is not None and lon is not None:
+            acc_m = None
+            try:
+                if accuracy is not None:
+                    acc_m = float(accuracy)
+            except (TypeError, ValueError):
+                acc_m = None
+
+            acc_txt = t("acc_suffix", acc_m) if acc_m is not None else ""
+            st.caption(t("your_location", lat, lon, acc_txt))
+
+            farm = _plantation_median_lat_lon(mapped)
+            farm_dist = None
+            if farm is not None:
+                farm_dist = haversine_m(float(lat), float(lon), farm[0], farm[1])
+
+            too_far = farm_dist is not None and farm_dist > GPS_MAX_FARM_DIST_M
+            too_coarse = acc_m is None or acc_m > GPS_MAX_ACC_M
+
+            if too_far or too_coarse:
+                warn_dist = farm_dist if farm_dist is not None else (acc_m or 0.0)
+                st.warning(t("gps_ignored_far", warn_dist))
+                if too_far and farm_dist is not None:
+                    st.caption(t("gps_far_from_farm", farm_dist))
+                if too_coarse and acc_m is not None:
+                    st.caption(t("gps_accuracy_poor", acc_m))
+            else:
+                match_r = float(NEAR_PLANT_RADIUS_M)
+                if acc_m is not None and acc_m > match_r:
+                    match_r = min(max(acc_m, NEAR_PLANT_RADIUS_M), 25.0)
+
+                hit = nearest_mapped_plant(mapped, float(lat), float(lon))
+                if hit is None:
+                    st.warning(t("could_not_match"))
+                else:
+                    plant_n, cluster, dist_m = hit
+                    if dist_m <= match_r:
+                        # Never overwrite a map/number choice with GPS
+                        cur_src = st.session_state.get("near_me_selected_source")
+                        if cur_src in (None, "gps"):
+                            prev_n = st.session_state.get("near_me_selected_n")
+                            st.session_state["near_me_selected_n"] = plant_n
+                            st.session_state["near_me_selected_source"] = "gps"
+                            st.session_state["near_me_selected_dist"] = dist_m
+                            if match_r > NEAR_PLANT_RADIUS_M:
+                                st.caption(t("matched_uncertainty", acc_m or match_r))
+                            if prev_n != plant_n or cur_src != "gps":
+                                st.rerun()
+                    else:
+                        st.markdown(
+                            '<div style="text-align:center;padding:1.0rem 0 0.4rem 0;">'
+                            '<div style="font-size:clamp(1.4rem,6vw,2.0rem);font-weight:700;">'
+                            "%s</div></div>"
+                            % html.escape(t("no_plant_within", match_r)),
+                            unsafe_allow_html=True,
+                        )
+                        p = cluster.representative
+                        label = HEALTH_COLORS.get(
+                            p.health, HEALTH_COLORS["white"]
+                        )["label"]
+                        st.markdown(
+                            '<div style="text-align:center;opacity:0.85;">%s</div>'
+                            % t(
+                                "nearest_plant",
+                                plant_n,
+                                dist_m,
+                                html.escape(label),
+                            ),
+                            unsafe_allow_html=True,
+                        )
 
 
 def page_plant_mapping() -> None:
